@@ -45,12 +45,25 @@ public static class Mouse {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
 }
 '@
+# Los clics son reales: si otra ventana está en primer plano, el clic no llega a FFCleaner. Se comprueba antes
+# de pulsar en lugar de dejar que falle una aserción que no explica el motivo.
+function FocusSut() {
+    $handle = [IntPtr]$script:root.Current.NativeWindowHandle
+    $end = (Get-Date).AddSeconds(6)
+    do {
+        [Mouse]::SetForegroundWindow($handle) | Out-Null
+        Start-Sleep -Milliseconds 150
+        if ([Mouse]::GetForegroundWindow() -eq $handle) { return }
+    } while ((Get-Date) -lt $end)
+    throw 'No se pudo traer la ventana de FFCleaner al primer plano: otra ventana tiene el foco y los clics reales no llegarían'
+}
 # Clic real de ratón dentro de la tarjeta de una categoría, a la derecha de su casilla (sobre el texto).
 function ClickCard([string]$id) {
-    [Mouse]::SetForegroundWindow([IntPtr]$script:root.Current.NativeWindowHandle) | Out-Null
+    FocusSut
     $r = (Element $id).Current.BoundingRectangle
     [Mouse]::Click([int]($r.Right + 160), [int]($r.Top + $r.Height / 2 + 14)); Start-Sleep -Milliseconds 300
 }
@@ -76,7 +89,7 @@ Check ((State 'chk-chrome') -eq 'On' -and (State 'chk-brave') -eq 'On') '«Marca
 Invoke 'ClearSelectionButton'; Await 'SelectionText' 'Nada marcado'
 Check ((State 'chk-chrome') -eq 'Off' -and (State 'chk-brave') -eq 'Off') '«Desmarcar todo» lo deja todo sin marcar'
 # Clic real en la casilla de una aplicación: la marca y además muestra sus categorías.
-[Mouse]::SetForegroundWindow([IntPtr]$script:root.Current.NativeWindowHandle) | Out-Null
+FocusSut
 $box = (Element 'chk-brave').Current.BoundingRectangle
 [Mouse]::Click([int]($box.Left + $box.Width / 2), [int]($box.Top + $box.Height / 2)); Start-Sleep -Milliseconds 300
 Check ((State 'chk-brave') -eq 'On' -and (Text 'SelectedAppTitle') -eq 'Brave') 'la casilla de la aplicación la marca y muestra sus categorías'
@@ -123,6 +136,8 @@ AwaitEnabled 'CleanButton' $false
 # U2/U4 Registro: familias → analizar → marcar seguros → reparar (respaldo) → restaurar, en la misma pantalla.
 Invoke 'NavRegistryButton'
 Check ((State 'fam-startup') -eq 'On') 'familias marcadas por defecto'
+Check ((State 'OnlyRepairableBox') -eq 'On') '«Solo reparables» activado por defecto'
+Check (-not (Find 'RegistryLog') -and -not (Find 'RegistrySummary')) 'sin la caja de resultado y resumen del análisis'
 Check (-not (Element 'RepairButton').Current.IsEnabled) 'sin análisis no se puede reparar'
 Invoke 'ScanRegistryButton'; Await 'RegistryStatus' 'Registro analizado'
 Check ((Text 'RegistryStatus') -like '*6 reparables*1 solo informativos (ocultos*') 'el análisis separa reparables de informativos'

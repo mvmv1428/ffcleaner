@@ -69,7 +69,7 @@ public sealed class RegistryViewModel : ObservableObject
     private BackupRowVm? _selectedBackup;
     private string _status = Loc.T("Elige familias y pulsa Analizar Registro.", "Choose families and press Scan Registry.");
     private string _summary = "", _log = "", _confirmText = "";
-    private bool _busy, _onlyRepairable;
+    private bool _busy, _onlyRepairable = true;
     private string? _confirming;
 
     public RegistryViewModel(IRegistryAnalysisService analysis, IRegistryRepairService repair, IRegistryBackupService backups,
@@ -144,7 +144,7 @@ public sealed class RegistryViewModel : ObservableObject
     public bool OnlyRepairable
     {
         get => _onlyRepairable;
-        set { if (Set(ref _onlyRepairable, value)) FindingsView.Refresh(); }
+        set { if (Set(ref _onlyRepairable, value)) { FindingsView.Refresh(); RaiseFilterState(); } }
     }
 
     public bool IsBusy
@@ -155,6 +155,7 @@ public sealed class RegistryViewModel : ObservableObject
             if (!Set(ref _busy, value)) return;
             Raise(nameof(IsIdle));
             Raise(nameof(ShowEmptyState));
+            RaiseFilterState();
             CommandManager.InvalidateRequerySuggested();
         }
     }
@@ -163,6 +164,14 @@ public sealed class RegistryViewModel : ObservableObject
 
     public bool HasFindings => _findings.Count > 0;
     public bool ShowEmptyState => _findings.Count == 0 && !_busy;
+
+    /// <summary>Hay hallazgos, pero ninguno reparable y el filtro «Solo reparables» los oculta todos.</summary>
+    public bool ShowFilteredEmpty => _onlyRepairable && !_busy && _findings.Count > 0 && !_findings.Any(f => f.CanRepair);
+    public string FilteredEmptyText => Loc.T(
+        $"Ninguna entrada se puede reparar con seguridad. {_findings.Count} hallazgos solo informativos están ocultos: desactiva «Solo reparables» para verlos.",
+        $"No entry can be safely repaired. {_findings.Count} informational findings are hidden: turn off «Only repairable» to see them.");
+
+    private void RaiseFilterState() { Raise(nameof(ShowFilteredEmpty)); Raise(nameof(FilteredEmptyText)); }
 
     /// <summary>Recuento por riesgo del último análisis, para las etiquetas del encabezado de la tabla.</summary>
     public string RiskSummary => _findings.Count == 0 ? "" :
@@ -257,10 +266,8 @@ public sealed class RegistryViewModel : ObservableObject
         _scan = scan;
         var infos = _analysis.Families.ToDictionary(f => f.Family);
         var names = infos.ToDictionary(p => p.Key, p => CatalogText.FamilyName(p.Value));
-        // Si hay hallazgos reparables mezclados con informativos, se muestran primero solo los reparables.
-        _onlyRepairable = scan.Findings.Any(f => f.CanRepair) && scan.Findings.Any(f => !f.CanRepair);
-        Raise(nameof(OnlyRepairable));
         SetFindings([.. scan.Findings.Select(f => new FindingRowVm(f, () => CatalogText.FamilyName(infos[f.Family]), UpdateSelectionStatus))]);
+        RaiseFilterState();
         Summary = string.Join(Environment.NewLine, scan.Stats.Select(s =>
             Loc.T($"{names[s.Family]}: {s.KeysVisited} claves abiertas · {s.EntriesExamined} entradas examinadas · {s.Findings} hallazgos ({s.Repairable} reparables) · {s.ElapsedMs:N0} ms",
                   $"{names[s.Family]}: {s.KeysVisited} keys opened · {s.EntriesExamined} entries examined · {s.Findings} findings ({s.Repairable} repairable) · {s.ElapsedMs:N0} ms"))
