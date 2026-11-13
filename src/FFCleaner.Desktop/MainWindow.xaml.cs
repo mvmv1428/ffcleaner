@@ -111,7 +111,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void CategoryCard_Click(object sender, MouseButtonEventArgs e)
     {
-        for (var node = e.OriginalSource as DependencyObject; node is not null && node != sender; node = Parent(node))
+        for (var node = e.OriginalSource as DependencyObject; node is not null && node != sender; node = ParentOf(node))
             if (node is ToggleButton) return;
         if (sender is not FrameworkElement { DataContext: TreeNodeVm category } || !_cleanup.IsIdle) return;
         category.IsChecked = category.IsChecked != true;
@@ -124,7 +124,7 @@ public partial class MainWindow : Window
         if (sender is FrameworkElement { DataContext: TreeNodeVm app }) _cleanup.SelectedApp = app;
     }
 
-    private static DependencyObject? Parent(DependencyObject node) =>
+    private static DependencyObject? ParentOf(DependencyObject node) =>
         node is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
 
     private static LinearGradientBrush Gradient(string from, string to) => new(
