@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>FFCleaner.Setup</AssemblyName>
+    <RootNamespace>FFCleaner.Setup</RootNamespace>
+    <ApplicationIcon>..\FFCleaner.Desktop\Assets\ffcleaner.ico</ApplicationIcon>
+    <ApplicationManifest>..\FFCleaner.Desktop\app.manifest</ApplicationManifest>
+    <Product>FFCleaner</Product>
+    <Description>Instalador y desinstalador de FFCleaner</Description>
+    <SatelliteResourceLanguages>es</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="..\FFCleaner.Desktop\Assets\ffcleaner.png" Link="Assets\ffcleaner.png" />
+  </ItemGroup>
+</Project>

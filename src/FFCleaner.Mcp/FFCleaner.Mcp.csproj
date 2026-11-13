@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>FFCleaner.Mcp</AssemblyName>
+    <RootNamespace>FFCleaner.Mcp</RootNamespace>
+    <Product>FFCleaner</Product>
+    <Description>Servidor MCP de FFCleaner para agentes</Description>
+    <ApplicationIcon>../FFCleaner.Desktop/Assets/ffcleaner.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FFCleaner.Core/FFCleaner.Core.csproj" />
+    <ProjectReference Include="../FFCleaner.Cleaning/FFCleaner.Cleaning.csproj" />
+    <ProjectReference Include="../RegistryAnalysis/RegistryAnalysis.csproj" />
+  </ItemGroup>
+</Project>

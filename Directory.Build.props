@@ -1,0 +1,22 @@
+<Project>
+  <PropertyGroup>
+    <!-- Versión única de todo FFCleaner. Para publicar una versión nueva: cambiarla aquí y crear la etiqueta vX.Y.Z. -->
+    <Version>0.3.0</Version>
+    <!-- Repositorio de GitHub donde el actualizador busca versiones nuevas, como «usuario/nombre».
+         Vacío = la aplicación no busca actualizaciones. -->
+    <FFCleanerUpdateRepository>mvmv1428/ffcleaner</FFCleanerUpdateRepository>
+
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Deterministic>true</Deterministic>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <!-- Los binarios no deben llevar rutas de la máquina de compilación: se sustituyen por una raíz neutra
+         y los símbolos van incrustados (los errores registrados conservan archivo y línea). -->
+    <PathMap>$(MSBuildThisFileDirectory)=/ffcleaner/</PathMap>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="FFCleanerUpdateRepository" Value="$(FFCleanerUpdateRepository)" />
+  </ItemGroup>
+</Project>

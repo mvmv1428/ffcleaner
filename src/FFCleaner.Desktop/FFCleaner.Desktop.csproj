@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>FFCleaner</AssemblyName>
+    <RootNamespace>FFCleaner.Desktop</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\ffcleaner.ico</ApplicationIcon>
+    <Product>FFCleaner</Product>
+    <Description>Limpieza personalizada y Registro</Description>
+    <SatelliteResourceLanguages>es</SatelliteResourceLanguages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="Assets\ffcleaner.ico" />
+    <Resource Include="Assets\ffcleaner.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FFCleaner.Core/FFCleaner.Core.csproj" />
+    <ProjectReference Include="../FFCleaner.Cleaning/FFCleaner.Cleaning.csproj" />
+    <ProjectReference Include="../RegistryAnalysis/RegistryAnalysis.csproj" />
+  </ItemGroup>
+</Project>

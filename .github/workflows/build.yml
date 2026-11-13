@@ -1,0 +1,51 @@
+name: Compilar y probar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compilar (advertencias como errores)
+        shell: pwsh
+        run: |
+          foreach ($p in 'FFCleaner.Desktop', 'FFCleaner.Cli', 'FFCleaner.Mcp', 'FFCleaner.Setup') {
+            dotnet build "src/$p/$p.csproj" -c Release -warnaserror
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      # Las pruebas destructivas usan solo carpetas de sandbox y la clave HKCU\Software\CleanerApp_TestSandbox.
+      - name: Pruebas del motor
+        shell: pwsh
+        run: |
+          foreach ($t in 'CoreTests', 'CleaningTests', 'RegistryTests', 'RegistrySafetyTests', 'DesktopPolicyTests') {
+            dotnet run --project "tests/$t" -c Release
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+
+      - name: Pruebas de la CLI y del servidor MCP
+        run: |
+          python tests/cli_smoke.py
+          python tests/mcp_smoke.py
+
+      # Las pruebas de interfaz (UI Automation), del instalador y de la actualización necesitan un escritorio
+      # interactivo: se ejecutan en local con «python tools/verify_release.py --portable».

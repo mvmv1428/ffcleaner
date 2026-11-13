@@ -1,0 +1,16 @@
+# Compilación
+**/bin/
+**/obj/
+*.user
+.vs/
+__pycache__/
+
+# Paquetes y evidencias generados (se publican como «releases», no en el código)
+artifacts/
+dist/
+
+# Documentación interna del desarrollo: contiene rutas, inventarios y análisis de un equipo concreto.
+# No se publica. Lo público está en README.md.
+agents.md
+plan.md
+docs/

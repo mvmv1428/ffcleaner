@@ -1,0 +1,80 @@
+<Window x:Class="FFCleaner.Setup.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Instalar FFCleaner" Width="620" Height="470" ResizeMode="CanMinimize" WindowStartupLocation="CenterScreen"
+        Icon="pack://application:,,,/Assets/ffcleaner.png" Background="{StaticResource Canvas}" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display">
+ <DockPanel>
+  <!-- Cabecera -->
+  <Border DockPanel.Dock="Top" Padding="28,20">
+   <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#141537" Offset="0"/><GradientStop Color="#0B1426" Offset="1"/></LinearGradientBrush></Border.Background>
+   <DockPanel>
+    <Image DockPanel.Dock="Left" Source="pack://application:,,,/Assets/ffcleaner.png" Width="50" Height="50" Margin="0,0,16,0" RenderOptions.BitmapScalingMode="HighQuality"/>
+    <StackPanel VerticalAlignment="Center">
+     <TextBlock x:Name="HeaderTitle" AutomationProperties.AutomationId="HeaderTitle" Text="Instalar FFCleaner" Foreground="White" FontSize="21" FontWeight="Bold"/>
+     <TextBlock x:Name="HeaderSubtitle" Foreground="#A3ABCC" Margin="0,3,0,0"/>
+    </StackPanel>
+   </DockPanel>
+  </Border>
+
+  <!-- Pie con los botones del asistente -->
+  <Border DockPanel.Dock="Bottom" Background="White" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="28,14">
+   <DockPanel>
+    <TextBlock x:Name="StepText" Foreground="{StaticResource InkMuted}" VerticalAlignment="Center" FontSize="12"/>
+    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+     <Button x:Name="SecondaryButton" AutomationProperties.AutomationId="SecondaryButton" Content="Cancelar" Margin="0,0,10,0" Click="Secondary_Click"/>
+     <Button x:Name="PrimaryButton" AutomationProperties.AutomationId="PrimaryButton" Content="Instalar" Style="{StaticResource Primary}" IsDefault="True" Click="Primary_Click"/>
+    </StackPanel>
+   </DockPanel>
+  </Border>
+
+  <Grid Margin="28,20,28,12">
+   <!-- 1. Opciones de instalación -->
+   <StackPanel x:Name="OptionsPage">
+    <TextBlock Text="FFCleaner se instalará solo para tu usuario; no hace falta ser administrador." Foreground="{StaticResource InkSoft}" TextWrapping="Wrap"/>
+    <TextBlock Text="Carpeta de instalación" FontWeight="SemiBold" Foreground="{StaticResource Ink}" Margin="0,18,0,6"/>
+    <DockPanel>
+     <Button DockPanel.Dock="Right" AutomationProperties.AutomationId="BrowseButton" Content="Cambiar…" Margin="8,0,0,0" Padding="12,6" MinWidth="0" Click="Browse_Click"/>
+     <TextBox x:Name="PathBox" AutomationProperties.AutomationId="PathBox" Padding="8,6" VerticalContentAlignment="Center" BorderBrush="#C5CAD8"/>
+    </DockPanel>
+    <CheckBox x:Name="DesktopBox" AutomationProperties.AutomationId="DesktopBox" Content="Crear acceso directo en el escritorio" Margin="0,16,0,0"/>
+    <Border Margin="0,18,0,0" Background="White" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" Padding="14,10">
+     <TextBlock Foreground="{StaticResource InkMuted}" FontSize="12" TextWrapping="Wrap">
+      Se creará el acceso del menú Inicio y FFCleaner aparecerá en «Aplicaciones instaladas» de Windows, desde donde se desinstala.
+      Tus ajustes y los respaldos del Registro se guardan aparte, en %LOCALAPPDATA%\FFCleaner.
+     </TextBlock>
+    </Border>
+    <TextBlock x:Name="OptionsNote" AutomationProperties.AutomationId="OptionsNote" Foreground="{StaticResource InkSoft}" TextWrapping="Wrap" Margin="0,12,0,0"/>
+   </StackPanel>
+
+   <!-- 1b. Confirmar desinstalación -->
+   <StackPanel x:Name="UninstallPage" Visibility="Collapsed">
+    <TextBlock x:Name="UninstallText" AutomationProperties.AutomationId="UninstallText" Foreground="{StaticResource InkSoft}" TextWrapping="Wrap"/>
+    <CheckBox x:Name="RemoveDataBox" AutomationProperties.AutomationId="RemoveDataBox" Margin="0,20,0,0">
+     <TextBlock TextWrapping="Wrap">Borrar también mis datos de FFCleaner: ajustes, bitácoras y <Bold>respaldos del Registro</Bold>.</TextBlock>
+    </CheckBox>
+    <TextBlock Text="Sin los respaldos ya no podrás deshacer las reparaciones del Registro hechas con FFCleaner. Si no estás seguro, déjalo sin marcar." Foreground="#8A5208" FontSize="12" TextWrapping="Wrap" Margin="22,6,0,0"/>
+   </StackPanel>
+
+   <!-- 2. Progreso -->
+   <StackPanel x:Name="ProgressPage" Visibility="Collapsed" VerticalAlignment="Center">
+    <TextBlock x:Name="ProgressTitle" Text="Instalando FFCleaner…" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource Ink}"/>
+    <ProgressBar x:Name="Bar" AutomationProperties.AutomationId="Bar" Minimum="0" Maximum="100" Margin="0,16,0,0"/>
+    <TextBlock x:Name="ProgressText" AutomationProperties.AutomationId="ProgressText" Foreground="{StaticResource InkSoft}" Margin="0,10,0,0" TextWrapping="Wrap"/>
+    <Border x:Name="ErrorBox" Visibility="Collapsed" Margin="0,16,0,0" Background="#FFF0F0" BorderBrush="#F6C3C5" BorderThickness="1" CornerRadius="10" Padding="14,10">
+     <TextBlock x:Name="ErrorText" AutomationProperties.AutomationId="ErrorText" Foreground="#A4262C" TextWrapping="Wrap"/>
+    </Border>
+   </StackPanel>
+
+   <!-- 3. Terminado -->
+   <StackPanel x:Name="DonePage" Visibility="Collapsed" VerticalAlignment="Center">
+    <Border Width="64" Height="64" CornerRadius="32" Background="#E7F8F1" HorizontalAlignment="Left">
+     <TextBlock Text="&#xE73E;" FontFamily="{StaticResource Icons}" FontSize="28" Foreground="{StaticResource SuccessBrush}" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    </Border>
+    <TextBlock x:Name="DoneTitle" AutomationProperties.AutomationId="DoneTitle" FontSize="18" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,14,0,0"/>
+    <TextBlock x:Name="DoneText" AutomationProperties.AutomationId="DoneText" Foreground="{StaticResource InkSoft}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+    <CheckBox x:Name="LaunchBox" AutomationProperties.AutomationId="LaunchBox" Content="Abrir FFCleaner ahora" IsChecked="True" Margin="0,18,0,0"/>
+   </StackPanel>
+  </Grid>
+ </DockPanel>
+</Window>
