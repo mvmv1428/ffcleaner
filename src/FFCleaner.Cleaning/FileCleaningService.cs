@@ -69,7 +69,8 @@ public sealed class FileCleaningService : IFileCleaningService
         return new TargetCleaningResult(target.Key, target.AppName, target.CategoryName, target.ProfileName,
             (int)removed, freed,
             status is CleanStatus.Omitido ? notDeleted : 0, status is CleanStatus.Bloqueado ? notDeleted : 0,
-            status is CleanStatus.Error ? notDeleted : 0, 0, status is CleanStatus.Cancelado ? notDeleted : 0, 0,
+            status is CleanStatus.Error ? notDeleted : 0, status is CleanStatus.NoConfirmado ? notDeleted : 0,
+            status is CleanStatus.Cancelado ? notDeleted : 0, 0,
             [new(path, status, detail)], 0) { Reasons = reasons };
     }
 

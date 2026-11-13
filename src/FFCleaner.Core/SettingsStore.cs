@@ -83,12 +83,22 @@ public sealed class SettingsStore
             File.Copy(path, LegacyBackupPath, overwrite: false);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(settings);
         var temporary = path + ".writing-" + Guid.NewGuid().ToString("N");
-        using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        try
         {
-            output.Write(bytes);
-            output.Flush(true);
+            using (var output = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                output.Write(bytes);
+                output.Flush(true);
+            }
+            PathSafety.EnsureSafe(parent);
+            File.Move(temporary, path, true);
         }
-        PathSafety.EnsureSafe(parent);
-        File.Move(temporary, path, true);
+        catch
+        {
+            // Un fallo al guardar no debe dejar el archivo temporal junto a los ajustes buenos.
+            try { File.Delete(temporary); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            throw;
+        }
     }
 }

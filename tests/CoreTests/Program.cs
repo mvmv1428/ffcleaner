@@ -652,6 +652,50 @@ tests.Add("claves_de_objetivo_ida_y_vuelta", () =>
     Check.True(!TargetKey.TryParse("chrome/cache", out _) && !TargetKey.TryParse("a//b", out _) && !TargetKey.TryParse(null, out _), "Formas inválidas");
 });
 
+// ───────────── Regresiones de la auditoría del 13 de noviembre ─────────────
+
+tests.Add("guardar_ajustes_fallido_no_deja_archivos_temporales", () =>
+{
+    using var fixture = SandboxFixture.Create();
+    var directory = Path.Combine(fixture.Folders.StateDirectory, "Config");
+    Directory.CreateDirectory(directory);
+    var store = new SettingsStore(Path.Combine(directory, "settings.json"));
+    // Un directorio con el nombre del archivo impide el reemplazo final: el guardado falla.
+    Directory.CreateDirectory(Path.Combine(directory, "settings.json"));
+    var failed = false;
+    try { store.Save(UserSettings.Empty); }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { failed = true; }
+    Check.True(failed, "Se esperaba que el guardado fallara");
+    Check.Equal(0, Directory.GetFiles(directory, "*.writing-*").Length, "Sin restos de escritura temporal");
+    Check.Equal(0, Directory.GetFiles(directory).Length, "Sin archivos nuevos");
+});
+
+tests.Add("restauracion_de_base_solo_se_da_por_buena_si_se_comprobo", () =>
+{
+    using var fixture = SandboxFixture.Create();
+    var folder = Path.Combine(fixture.Folders.StateDirectory, "BrowserBackups", "chrome", "Default");
+    var backup = fixture.Write(Path.Combine(folder, "History"), 4096);
+    var live = fixture.Write(Path.Combine(fixture.Profile("chrome", "Default"), "History"), 64);
+
+    Check.True(BrowserData.Restore(backup, live), "Restauración correcta informada como tal");
+    Check.Equal(new FileInfo(backup).Length, new FileInfo(live).Length, "El archivo recupera el tamaño del respaldo");
+
+    // Destino bloqueado: la restauración no puede completarse y no debe presentarse como exitosa.
+    File.SetAttributes(live, FileAttributes.ReadOnly);
+    try { Check.True(!BrowserData.Restore(backup, live), "Una restauración fallida no se informa como restaurada"); }
+    finally { File.SetAttributes(live, FileAttributes.Normal); }
+});
+
+tests.Add("sqlite_de_windows_disponible_y_sin_rutas_de_carga_ambiguas", () =>
+{
+    if (!SqliteDb.IsAvailable) throw new SkipException("Este Windows no incluye winsqlite3.dll");
+    using var fixture = SandboxFixture.Create();
+    var file = Path.Combine(fixture.Root, "prueba.db");
+    using (var db = SqliteDb.Open(file, writable: true, create: true)) db.Exec("CREATE TABLE t (x INTEGER)");
+    using (var db = SqliteDb.Open(file, writable: false)) Check.Equal(1L, db.Scalar("SELECT count(*) FROM sqlite_master"), "Base abierta y consultada desde System32");
+    File.Delete(file);
+});
+
 return await tests.RunAsync(args);
 
 /// <summary>Ejecutor falso: solo cuenta llamadas. Sirve para probar que el flujo nunca le entrega un lote obsoleto.</summary>

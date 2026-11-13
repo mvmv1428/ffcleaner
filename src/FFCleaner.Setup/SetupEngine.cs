@@ -115,17 +115,20 @@ public static class SetupEngine
         var files = sums.Keys.ToList();
         for (var i = 0; i < files.Count; i++)
         {
-            var relative = files[i].Replace('/', '\\');
-            var target = Path.Combine(dest, relative);
+            // Un nombre del paquete no puede salir de la carpeta de destino.
+            if (!TryCombineInside(dest, files[i], out var target) ||
+                !TryCombineInside(source, files[i], out var origin) || !File.Exists(origin))
+                throw new InvalidOperationException("El paquete contiene una ruta no válida: " + files[i]);
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(Path.Combine(source, relative), target, overwrite: true);
+            File.Copy(origin, target, overwrite: true);
             if (i % 20 == 0) Report(progress, 8 + 72.0 * i / files.Count, $"Copiando archivos… {i + 1} de {files.Count}");
         }
         File.Copy(Path.Combine(source, "SHA256SUMS.json"), Path.Combine(dest, "SHA256SUMS.json"), overwrite: true);
 
         Report(progress, 82, "Comprobando la integridad de lo instalado…");
         foreach (var (name, hash) in sums)
-            if (!string.Equals(Hash(Path.Combine(dest, name.Replace('/', '\\'))), hash, StringComparison.OrdinalIgnoreCase))
+            if (!TryCombineInside(dest, name, out var copied) ||
+                !string.Equals(Hash(copied), hash, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("El archivo " + name + " no se copió correctamente. Vuelve a ejecutar el instalador.");
 
         Report(progress, 90, "Creando accesos directos…");
@@ -172,6 +175,7 @@ public static class SetupEngine
     {
         Report(progress, 5, "Comprobando que FFCleaner no esté abierto…");
         EnsureNotRunning(manifest.Destination);
+        EnsureManifestIsSane(manifest, removeData);
         Report(progress, 20, "Quitando accesos directos…");
         foreach (var link in manifest.Shortcuts) if (File.Exists(link)) File.Delete(link);
         Report(progress, 35, "Quitando la entrada de «Aplicaciones instaladas»…");
@@ -194,7 +198,7 @@ public static class SetupEngine
         var sums = ReadSums(Path.Combine(dest, "SHA256SUMS.json")) ?? new Dictionary<string, string>();
         foreach (var name in sums.Keys.Concat(ExtraFiles))
         {
-            var path = Path.Combine(dest, name.Replace('/', '\\'));
+            if (!TryCombineInside(dest, name, out var path)) continue;
             if (!File.Exists(path)) continue;
             File.SetAttributes(path, FileAttributes.Normal);
             File.Delete(path);
@@ -221,6 +225,80 @@ public static class SetupEngine
 
     private static Dictionary<string, string>? ReadSums(string path) =>
         File.Exists(path) ? JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path)) : null;
+
+    /// <summary>
+    /// Une un nombre relativo al paquete con su carpeta base. Un nombre con «..», ruta absoluta, unidad o
+    /// dos puntos intentaría salir de la carpeta: se descarta en lugar de copiarlo o borrarlo fuera.
+    /// </summary>
+    internal static bool TryCombineInside(string baseDirectory, string relative, out string path)
+    {
+        path = string.Empty;
+        if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) ||
+            relative.Contains("..", StringComparison.Ordinal) || relative.Contains(':', StringComparison.Ordinal)) return false;
+        var full = Path.GetFullPath(Path.Combine(baseDirectory, relative.Replace('/', '\\')));
+        var root = Path.GetFullPath(baseDirectory).TrimEnd('\\') + "\\";
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+        path = full;
+        return true;
+    }
+
+    /// <summary>
+    /// install.json vive en una carpeta escribible por el usuario: no se le concede permiso para borrar
+    /// claves del Registro ajenas ni carpetas de datos que no sean las suyas.
+    /// </summary>
+    private static void EnsureManifestIsSane(InstallManifest manifest, bool removeData)
+    {
+        if (!RemoveInstalledFilesAllowed(manifest.Destination))
+            throw new InvalidOperationException("install.json apunta a una carpeta que FFCleaner no debe modificar: " + manifest.Destination);
+        var key = (manifest.RegistryKey ?? string.Empty).Trim('\\');
+        if (!key.Equals(KeyName, StringComparison.OrdinalIgnoreCase) &&
+            !key.EndsWith("\\" + KeyName, StringComparison.OrdinalIgnoreCase) &&
+            !key.StartsWith(SetupOptions.SandboxRegistryPrefix.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("install.json apunta a una clave del Registro ajena a FFCleaner: " + manifest.RegistryKey);
+        if (!removeData) return;
+        var data = manifest.DataDirectory;
+        if (!OnlyOwnData(data))
+            throw new InvalidOperationException("install.json apunta a una carpeta de datos que no es de FFCleaner: " + data);
+    }
+
+    /// <summary>La carpeta de la instalación debe ser una carpeta normal, no una raíz ni un enlace.</summary>
+    private static bool RemoveInstalledFilesAllowed(string destination)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(destination) || !Path.IsPathFullyQualified(destination)) return false;
+            var full = Path.GetFullPath(destination);
+            if (full.Length <= Path.GetPathRoot(full)!.Length + 1) return false;
+            if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0) return false;
+            return System.IO.Directory.Exists(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
+
+    /// <summary>
+    /// Solo se borran datos propios: la carpeta «FFCleaner» del perfil o una carpeta dentro del temporal
+    /// (el sandbox de las pruebas). Nunca Documentos, Escritorio, una raíz de unidad o el perfil completo.
+    /// </summary>
+    private static bool OnlyOwnData(string? dataDirectory)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(dataDirectory) || !Path.IsPathFullyQualified(dataDirectory)) return false;
+            var full = Path.GetFullPath(dataDirectory).TrimEnd('\\');
+            var root = Path.GetPathRoot(full)!;
+            if (full.Length <= root.Length + 1) return false;
+            if (System.IO.Directory.Exists(full) && (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0) return false;
+            static bool Inside(string path, string? parent) =>
+                !string.IsNullOrEmpty(parent) && path.StartsWith(Path.GetFullPath(parent).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+            var temp = Path.GetTempPath();
+            var defaultData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), KeyName);
+            return Path.GetFileName(full).Equals(KeyName, StringComparison.OrdinalIgnoreCase) ||
+                   Inside(full, temp) ||
+                   full.Equals(Path.GetFullPath(defaultData).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) ||
+                   Inside(full, defaultData);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
+    }
 
     private static string Hash(string path)
     {

@@ -132,7 +132,12 @@ public sealed class UpdateService
                        ?? throw new InvalidOperationException("Falta la lista de huellas del paquete.");
             foreach (var (name, expected) in sums)
             {
-                using var stream = File.OpenRead(Path.Combine(package, name.Replace('/', '\\')));
+                // La lista de huellas no puede nombrar rutas fuera del paquete descomprimido.
+                var candidate = Path.GetFullPath(Path.Combine(package, name.Replace('/', '\\')));
+                if (!candidate.StartsWith(Path.GetFullPath(package).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("..", StringComparison.Ordinal) || name.Contains(':', StringComparison.Ordinal))
+                    throw new InvalidOperationException("El paquete contiene una ruta no válida: " + name);
+                using var stream = File.OpenRead(candidate);
                 if (!string.Equals(Convert.ToHexString(await SHA256.HashDataAsync(stream, token)), expected, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException("El archivo " + name + " del paquete no coincide con su huella: no se instalará.");
             }

@@ -22,10 +22,35 @@ internal sealed class SqliteDb : IDisposable
 
     private SqliteDb(IntPtr db) => _db = db;
 
+    private static readonly Lazy<bool> AvailableProbe = new(() =>
+    {
+        try { return sqlite3_libversion() != IntPtr.Zero; }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException) { return false; }
+    });
+
+    /// <summary>
+    /// ¿Está disponible la SQLite que incluye Windows? Si no lo está, los datos de navegador se informan
+    /// como no disponibles en lugar de interrumpir el análisis con una excepción de carga de DLL.
+    /// </summary>
+    public static bool IsAvailable => AvailableProbe.Value;
+
+    /// <summary>Motivo único de ausencia, para mostrarlo junto a la categoría.</summary>
+    public const string UnavailableMessage =
+        "Este Windows no incluye la biblioteca SQLite (winsqlite3.dll); los datos del navegador no se pueden analizar ni limpiar.";
+
     public static SqliteDb Open(string path, bool writable, bool create = false)
     {
         var flags = (writable ? ReadWrite : ReadOnly) | (create ? Create : 0) | NoMutex;
-        var code = sqlite3_open_v2(Utf8(path), out var db, flags, IntPtr.Zero);
+        int code;
+        IntPtr db;
+        try
+        {
+            code = sqlite3_open_v2(Utf8(path), out db, flags, IntPtr.Zero);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            throw new SqliteException(-1, UnavailableMessage);
+        }
         if (code != Ok)
         {
             var message = db == IntPtr.Zero ? "No se pudo abrir la base." : Message(db);
@@ -96,15 +121,29 @@ internal sealed class SqliteDb : IDisposable
     }
 
     private const string Lib = "winsqlite3";
-    [DllImport(Lib)] private static extern int sqlite3_open_v2(byte[] filename, out IntPtr db, int flags, IntPtr vfs);
-    [DllImport(Lib)] private static extern int sqlite3_close_v2(IntPtr db);
-    [DllImport(Lib)] private static extern int sqlite3_busy_timeout(IntPtr db, int milliseconds);
-    [DllImport(Lib)] private static extern int sqlite3_exec(IntPtr db, byte[] sql, IntPtr callback, IntPtr argument, out IntPtr error);
-    [DllImport(Lib)] private static extern void sqlite3_free(IntPtr pointer);
-    [DllImport(Lib)] private static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int bytes, out IntPtr statement, IntPtr tail);
-    [DllImport(Lib)] private static extern int sqlite3_step(IntPtr statement);
-    [DllImport(Lib)] private static extern long sqlite3_column_int64(IntPtr statement, int column);
-    [DllImport(Lib)] private static extern IntPtr sqlite3_column_text(IntPtr statement, int column);
-    [DllImport(Lib)] private static extern int sqlite3_finalize(IntPtr statement);
-    [DllImport(Lib)] private static extern IntPtr sqlite3_errmsg(IntPtr db);
+    // Solo se carga desde System32: un «winsqlite3.dll» colocado junto al ejecutable no se ejecuta.
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_open_v2(byte[] filename, out IntPtr db, int flags, IntPtr vfs);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_close_v2(IntPtr db);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_busy_timeout(IntPtr db, int milliseconds);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_exec(IntPtr db, byte[] sql, IntPtr callback, IntPtr argument, out IntPtr error);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern void sqlite3_free(IntPtr pointer);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_prepare_v2(IntPtr db, byte[] sql, int bytes, out IntPtr statement, IntPtr tail);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_step(IntPtr statement);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern long sqlite3_column_int64(IntPtr statement, int column);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern IntPtr sqlite3_column_text(IntPtr statement, int column);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern int sqlite3_finalize(IntPtr statement);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern IntPtr sqlite3_errmsg(IntPtr db);
+    [DllImport(Lib), DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern IntPtr sqlite3_libversion();
 }

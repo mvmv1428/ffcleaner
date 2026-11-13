@@ -194,6 +194,8 @@ public sealed class RegistryRepairService : IRegistryRepairService
     private (RepairStatus, string) DeleteKey(BackupEntry entry)
     {
         var separator = entry.KeyPath.LastIndexOf('\\');
+        // Una clave directamente bajo la raíz del hive no tiene clave superior: no se elimina a ciegas.
+        if (separator <= 0) return (RepairStatus.Conflicto, "La clave no cuelga de una clave superior reconocida; se conserva.");
         var parentLocation = entry.Location with { KeyPath = entry.KeyPath[..separator] };
         var name = entry.KeyPath[(separator + 1)..];
         using var parent = _scope.Open(parentLocation, writable: true);

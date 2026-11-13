@@ -75,6 +75,8 @@ internal static class BrowserData
             var files = SessionFiles(profile).ToList();
             return new(files.Count, files.Sum(f => f.Length), null);
         }
+        // Sin la SQLite de Windows no se abre ninguna base: se informa en lugar de fallar con una excepción de carga.
+        if (!SqliteDb.IsAvailable) return new(0, 0, SqliteDb.UnavailableMessage);
         long items = 0, bytes = 0;
         foreach (var operation in Operations(target.Data!.Value))
         {
@@ -109,6 +111,8 @@ internal static class BrowserData
     {
         var profile = ProfileDirectory(target);
         if (target.Data == BrowserDataKind.Sessions) return CleanSessions(profile);
+        if (!SqliteDb.IsAvailable)
+            return new(CleanStatus.Error, 0, 0, 0, SqliteDb.UnavailableMessage + " No se modificó nada.", null);
 
         long removed = 0, before = 0, after = 0;
         string? backupFolder = null;
@@ -152,10 +156,15 @@ internal static class BrowserData
             }
             catch (SqliteException ex)
             {
-                if (!ex.IsLocked) Restore(backup, path);
-                return new(ex.IsLocked ? CleanStatus.Bloqueado : CleanStatus.Error, removed, before, after,
-                    ex.IsLocked ? target.AppName + " tiene la base abierta; ciérralo y vuelve a analizar."
-                        : "No se completó en " + operation.Leaf + " (" + ex.Message + "); se restauró la copia de seguridad.", backupFolder);
+                // Solo se afirma que la copia se restauró si la restauración se comprobó; si no, se indica dónde está.
+                var restored = !ex.IsLocked && Restore(backup, path);
+                var detail = ex.IsLocked
+                    ? target.AppName + " tiene la base abierta; ciérralo y vuelve a analizar."
+                    : restored
+                        ? "No se completó en " + operation.Leaf + " (" + ex.Message + "); se restauró la copia de seguridad."
+                        : "No se completó en " + operation.Leaf + " (" + ex.Message + "); NO se pudo restaurar automáticamente. " +
+                          "La copia original está en " + backupFolder + " (" + Path.GetFileName(path) + "): recupérala antes de abrir el navegador.";
+                return new(ex.IsLocked ? CleanStatus.Bloqueado : CleanStatus.Error, removed, before, after, detail, backupFolder);
             }
             catch (IOException ex)
             {
@@ -284,7 +293,11 @@ internal static class BrowserData
         return destination;
     }
 
-    private static void Restore(string backup, string path)
+    /// <summary>
+    /// Devuelve la copia a su sitio. Devuelve false si no se pudo comprobar la restauración: quien llama no debe
+    /// presentar entonces la limpieza como «revertida».
+    /// </summary>
+    internal static bool Restore(string backup, string path)
     {
         try
         {
@@ -292,10 +305,15 @@ internal static class BrowserData
                 if (File.Exists(path + suffix)) File.Delete(path + suffix);
             foreach (var suffix in new[] { "", "-journal", "-wal", "-shm" })
                 if (File.Exists(backup + suffix)) File.Copy(backup + suffix, path + suffix, overwrite: true);
+            // La copia principal debe existir y coincidir en tamaño: es lo mínimo comprobable aquí.
+            var original = new FileInfo(backup);
+            var restoredFile = new FileInfo(path);
+            return restoredFile.Exists && restoredFile.Length == original.Length;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             System.Diagnostics.Trace.TraceWarning("No se pudo restaurar {0}: {1}", path, ex.Message);
+            return false;
         }
     }
 

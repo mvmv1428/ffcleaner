@@ -99,8 +99,22 @@ internal sealed class NativeDirectory : IDisposable
             var next = BinaryPrimitives.ReadInt32LittleEndian(span);
             var nameBytes = BinaryPrimitives.ReadInt32LittleEndian(span[60..]);
             var nameOffset = _extended ? 88 : 104;
+            // Estructura corrupta o truncada: se corta la enumeración en lugar de leer fuera del búfer o repetirla.
+            if (nameBytes < 0 || nameOffset + nameBytes > span.Length)
+            {
+                _offset = -1;
+                entry = default;
+                return false;
+            }
             var name = MemoryMarshal.Cast<byte, char>(span.Slice(nameOffset, nameBytes));
-            _offset = next == 0 ? -1 : _offset + next;
+            if (next == 0) _offset = -1;
+            else if (next < 0 || _offset + next >= _buffer.Length)
+            {
+                _offset = -1;
+                entry = default;
+                return false;
+            }
+            else _offset += next;
             if (name is "." or "..") continue;
 
             entry = new Entry
