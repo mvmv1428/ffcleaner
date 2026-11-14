@@ -84,10 +84,13 @@
  <sys:String x:Key="S.Settings.ClaudeCode">Claude Code</sys:String>
  <sys:String x:Key="S.Settings.CopyCommand">Copiar comando</sys:String>
  <sys:String x:Key="S.Settings.CopyJson">Copiar configuración JSON</sys:String>
- <sys:String x:Key="S.Settings.AgentsSafety">Por seguridad, un agente siempre analiza antes de limpiar, solo puede usar categorías normales salvo que se le permita lo personal de forma expresa, y el Registro solo repara entradas «Seguro» con respaldo verificado.</sys:String>
+ <sys:String x:Key="S.Settings.AgentsAllow">Qué más pueden hacer los agentes</sys:String>
+ <sys:String x:Key="S.Settings.AgentsPersonal">Borrar datos personales del navegador y modelos de IA</sys:String>
+ <sys:String x:Key="S.Settings.AgentsRegistry">Reparar el Registro y restaurar sus respaldos</sys:String>
+ <sys:String x:Key="S.Settings.AgentsSafety">Sin estos permisos, un agente solo puede analizar, liberar cachés y temporales y activar o desactivar programas de inicio. Siempre analiza antes de limpiar, y aunque actives el Registro, solo se reparan entradas «Seguro» con respaldo verificado.</sys:String>
  <sys:String x:Key="S.Settings.Data">Datos de la aplicación</sys:String>
  <sys:String x:Key="S.Settings.Updates">Actualizaciones</sys:String>
- <sys:String x:Key="S.Settings.UpdatesHint">FFCleaner busca versiones nuevas en GitHub al abrirse. Si hay una, la descarga, comprueba su huella SHA-256 y se actualiza solo; nunca durante una limpieza o una reparación.</sys:String>
+ <sys:String x:Key="S.Settings.UpdatesHint">FFCleaner busca versiones nuevas en GitHub al abrirse. Si hay una, la descarga, comprueba su huella SHA-256 y se actualiza antes de abrir la ventana. Si hay otra ventana de FFCleaner abierta o un agente lo está usando, lo deja para la próxima vez.</sys:String>
  <sys:String x:Key="S.Settings.AutoUpdate">Buscar e instalar actualizaciones al abrir</sys:String>
  <sys:String x:Key="S.Settings.CheckNow">Buscar ahora</sys:String>
  <sys:String x:Key="S.Settings.Repository">Repositorio</sys:String>

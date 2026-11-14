@@ -209,6 +209,13 @@ Await 'SettingsStatus' 'Idioma guardado'
 (Element 'ThemeLight').GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
 Await 'SettingsStatus' 'Tema guardado'
 Check ((Text 'NavCleanupButton') -eq 'Limpieza personalizada') 'vuelve al español'
+# Permisos de los agentes: desactivados por defecto; activarlos se guarda (y se vuelve a dejar como estaba).
+$off = [System.Windows.Automation.ToggleState]::Off
+Check (((Element 'AgentsPersonalBox').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $off) -and
+       ((Element 'AgentsRegistryBox').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -eq $off)) 'los agentes empiezan sin permiso para datos personales ni para el Registro'
+Toggle 'AgentsRegistryBox'
+Await 'SettingsStatus' 'Permiso de los agentes guardado'
+Toggle 'AgentsRegistryBox'
 Write-Output 'SETTINGS_VERIFIED'
 
 if ($ExpectedRuntime) {

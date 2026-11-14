@@ -25,9 +25,16 @@ public partial class UpdateWindow : Window
     /// Comprueba (como mucho unos segundos) si hay versión nueva; si la hay, la descarga, la verifica y lanza el
     /// instalador. Devuelve true si FFCleaner debe cerrarse para que el instalador termine; false para abrir la app.
     /// </summary>
-    public static async Task<bool> TryUpdateAsync(UpdateService service, IReadOnlyList<string> relaunchArguments, DiagnosticsLog log)
+    public static async Task<bool> TryUpdateAsync(UpdateService service, IReadOnlyList<string> relaunchArguments, DiagnosticsLog log, string stateDirectory)
     {
         if (!service.Enabled || !UpdateService.IsInstalledCopy) return false;
+        // Con otra copia abierta (una ventana o el servidor MCP de un agente) el instalador no podría sustituir los
+        // archivos: ni se descarga ni se intenta, y se deja para la próxima vez.
+        if (UpdateService.OtherInstanceRunning() is { } other)
+        {
+            log.Write("actualizacion", "comprobación al abrir omitida: está abierto " + other);
+            return false;
+        }
         UpdateInfo? update;
         try
         {
@@ -40,6 +47,11 @@ public partial class UpdateWindow : Window
             return false;
         }
         if (update is null) return false;
+        if (UpdateService.RecentlyFailed(stateDirectory, update.Version, DateTime.UtcNow))
+        {
+            log.Write("actualizacion", $"la instalación de la versión {update.Version.ToString(3)} falló hace menos de 24 horas; no se reintenta todavía");
+            return false;
+        }
 
         var window = new UpdateWindow();
         var version = update.Version.ToString(3);
@@ -59,7 +71,7 @@ public partial class UpdateWindow : Window
             window.Bar.Value = 95;
             window.StatusText.Text = Loc.T("Instalando… FFCleaner se abrirá en unos segundos.", "Installing… FFCleaner will open in a few seconds.");
             window.SkipButton.IsEnabled = false;
-            service.LaunchInstaller(setup, relaunchArguments.Concat(["--updated-from", UpdateService.Current.ToString(3)]));
+            service.LaunchInstaller(setup, relaunchArguments.Concat(["--updated-from", UpdateService.Current.ToString(3)]), update.Version);
             await Task.Delay(800);   // el instalador muestra su propia ventana de progreso
             window.Close();
             return true;

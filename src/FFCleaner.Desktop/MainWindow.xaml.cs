@@ -41,6 +41,7 @@ public partial class MainWindow : Window
         updates.Noticed += (_, notice) => ShowToast(notice);
         Loaded += async (_, _) =>
         {
+            // Solo lo pasa el instalador tras una actualización correcta (si falla, reabre la versión de antes sin él).
             if (updatedFrom is not null)
                 ShowToast(new(Loc.T("FFCleaner se actualizó", "FFCleaner was updated"),
                     Loc.T($"Ahora tienes la versión {UpdateService.Current.ToString(3)} (antes {updatedFrom}).", $"You now have version {UpdateService.Current.ToString(3)} (was {updatedFrom})."), NoticeKind.Exito));

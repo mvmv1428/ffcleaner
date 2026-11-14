@@ -106,7 +106,12 @@ internal static class BrowserData
         return new(items, bytes, null);
     }
 
-    /// <summary>Borra el tipo de dato elegido. El navegador debe estar cerrado: lo comprueba quien llama.</summary>
+    /// <summary>
+    /// Borra el tipo de dato elegido. El navegador debe estar cerrado: lo comprueba quien llama.
+    /// La copia previa es temporal: solo sirve para deshacer un fallo a mitad de la operación. Si todo termina bien (o
+    /// la copia se devolvió a su sitio y se comprobó) se borra, porque guardarla dejaría a la vista justo lo que el
+    /// usuario quería borrar. Solo se conserva si la restauración automática no se pudo comprobar.
+    /// </summary>
     public static BrowserDataOutcome Clean(CleanupTarget target, string backupRoot)
     {
         var profile = ProfileDirectory(target);
@@ -114,16 +119,46 @@ internal static class BrowserData
         if (!SqliteDb.IsAvailable)
             return new(CleanStatus.Error, 0, 0, 0, SqliteDb.UnavailableMessage + " No se modificó nada.", null);
 
+        var backupFolder = Path.Combine(backupRoot, Safe(target.Key.AppId), Safe(target.Key.ProfileId));
+        var outcome = CleanDatabases(target, profile, backupFolder, out var keepBackup);
+        if (keepBackup)
+        {
+            // La copia es la única forma de recuperar la base: se marca para que la poda no la borre a los pocos días.
+            TryWriteKeepMarker(backupFolder);
+            return outcome;
+        }
+        var discarded = DiscardBackup(backupFolder, Path.GetDirectoryName(Path.GetDirectoryName(backupRoot))!);
+        if (outcome.Status == CleanStatus.Eliminado)
+            return outcome with
+            {
+                BackupPath = discarded ? null : backupFolder,
+                Detail = discarded ? "Datos borrados. La copia temporal de la base también se borró."
+                    : "Datos borrados. No se pudo borrar la copia temporal en " + backupFolder + ": bórrala a mano.",
+            };
+        return outcome with { BackupPath = discarded ? null : backupFolder };
+    }
+
+    private static BrowserDataOutcome CleanDatabases(CleanupTarget target, string profile, string backupFolder, out bool keepBackup)
+    {
+        keepBackup = false;
         long removed = 0, before = 0, after = 0;
-        string? backupFolder = null;
         foreach (var operation in Operations(target.Data!.Value))
         {
             var path = Path.Combine(profile, operation.Leaf);
             if (!File.Exists(path)) continue;
             if (!operation.Required && !IsDatabase(path)) continue;
-            backupFolder ??= Path.Combine(backupRoot, Safe(target.Key.AppId), Safe(target.Key.ProfileId));
-            var backup = Backup(path, backupFolder);
-            before += new FileInfo(path).Length;
+            string backup;
+            try
+            {
+                backup = Backup(path, backupFolder);
+                before += new FileInfo(path).Length;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Sin copia no se toca la base: es la garantía de poder deshacer un fallo.
+                return new(CleanStatus.Error, removed, before, after,
+                    "No se pudo copiar " + operation.Leaf + " antes de modificarla (" + ex.Message + "); esa base no se modificó.", null);
+            }
             try
             {
                 using (var db = SqliteDb.Open(path, writable: true))
@@ -158,6 +193,8 @@ internal static class BrowserData
             {
                 // Solo se afirma que la copia se restauró si la restauración se comprobó; si no, se indica dónde está.
                 var restored = !ex.IsLocked && Restore(backup, path);
+                // Bloqueada: no se llegó a modificar. Restaurada y comprobada: la base vuelve a ser la original.
+                keepBackup = !ex.IsLocked && !restored;
                 var detail = ex.IsLocked
                     ? target.AppName + " tiene la base abierta; ciérralo y vuelve a analizar."
                     : restored
@@ -166,23 +203,87 @@ internal static class BrowserData
                           "La copia original está en " + backupFolder + " (" + Path.GetFileName(path) + "): recupérala antes de abrir el navegador.";
                 return new(ex.IsLocked ? CleanStatus.Bloqueado : CleanStatus.Error, removed, before, after, detail, backupFolder);
             }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                return new(CleanStatus.Error, removed, before, after, "Error de archivo en " + operation.Leaf + ": " + ex.Message, backupFolder);
+                // Estado desconocido de la base: la copia se conserva por si hay que recuperarla.
+                keepBackup = true;
+                return new(CleanStatus.Error, removed, before, after, "Error de archivo en " + operation.Leaf + ": " + ex.Message +
+                    ". La copia original está en " + backupFolder + ".", backupFolder);
             }
         }
         if (target.Data == BrowserDataKind.History)
         {
             // «Visited Links» es una tabla derivada del historial: el navegador la regenera.
-            var visited = Path.Combine(profile, "Visited Links");
-            if (File.Exists(visited) && (File.GetAttributes(visited) & FileAttributes.ReparsePoint) == 0)
+            var visited = new FileInfo(Path.Combine(profile, "Visited Links"));
+            if (visited.Exists)
             {
-                before += new FileInfo(visited).Length;
-                try { File.Delete(visited); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { after += new FileInfo(visited).Length; }
+                before += visited.Length;
+                if (NativeMetadata.DeleteRegularFile(visited.FullName) is not null) after += visited.Length;
             }
         }
-        return new(CleanStatus.Eliminado, removed, before, after, "Datos borrados; copia de seguridad en " + (backupFolder ?? "—"), backupFolder);
+        return new(CleanStatus.Eliminado, removed, before, after, "Datos borrados.", null);
+    }
+
+    /// <summary>Nombre del aviso que conserva una copia necesaria para recuperar una base.</summary>
+    internal const string KeepMarker = "CONSERVAR.txt";
+
+    private static void TryWriteKeepMarker(string folder)
+    {
+        try
+        {
+            if (Directory.Exists(folder))
+                File.WriteAllText(Path.Combine(folder, KeepMarker),
+                    "FFCleaner no pudo comprobar que la base del navegador quedara restaurada. Esta es la copia original: " +
+                    "si el navegador muestra errores, ciérralo y copia estos archivos a la carpeta del perfil. Borra esta carpeta cuando ya no la necesites.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// Borra la copia temporal de un perfil y las carpetas que queden vacías por encima, sin salir de BrowserBackups.
+    /// Devuelve false si quedó algo (por ejemplo, un archivo bloqueado).
+    /// </summary>
+    private static bool DiscardBackup(string folder, string stateDirectory)
+    {
+        var parent = Path.Combine(stateDirectory, "BrowserBackups");
+        try
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+            for (var current = Path.GetDirectoryName(folder);
+                 current is not null && PathSafety.IsStrictlyWithin(current, parent) && Directory.Exists(current) && !Directory.EnumerateFileSystemEntries(current).Any();
+                 current = Path.GetDirectoryName(current))
+                Directory.Delete(current);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return !Directory.Exists(folder);
+        }
+    }
+
+    /// <summary>
+    /// Borra las copias que ya no hacen falta: las que no llevan el aviso de conservar (las de versiones anteriores, que
+    /// se guardaban siempre, o las de un cierre inesperado) y, pasados 30 días, también las que lo llevan. Las de la
+    /// última hora se respetan: pueden ser de una limpieza en curso en otro proceso (la aplicación y el servidor MCP).
+    /// </summary>
+    public static int PruneBackups(string stateDirectory, DateTime nowUtc)
+    {
+        var parent = new DirectoryInfo(Path.Combine(stateDirectory, "BrowserBackups"));
+        var removed = 0;
+        try
+        {
+            if (!parent.Exists || (parent.Attributes & FileAttributes.ReparsePoint) != 0) return 0;
+            foreach (var batch in parent.GetDirectories())
+            {
+                if ((batch.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                var keep = batch.EnumerateFiles(KeepMarker, SearchOption.AllDirectories).Any();
+                if (batch.CreationTimeUtc > (keep ? nowUtc.AddDays(-30) : nowUtc.AddHours(-1))) continue;
+                try { batch.Delete(recursive: true); removed++; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return removed;
     }
 
     private static BrowserDataOutcome CleanSessions(string profile)
@@ -192,16 +293,12 @@ internal static class BrowserData
         foreach (var file in SessionFiles(profile))
         {
             before += file.Length;
-            try
-            {
-                File.Delete(file.FullName);
-                removed++;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            if (NativeMetadata.DeleteRegularFile(file.FullName) is { } reason)
             {
                 failed++;
-                problem = ex.Message;
+                problem = reason;
             }
+            else removed++;
         }
         return failed == 0
             ? new(CleanStatus.Eliminado, removed, before, 0, "Sesiones y pestañas guardadas eliminadas.", null)
@@ -320,16 +417,10 @@ internal static class BrowserData
     private static string Safe(string text) =>
         string.Concat(text.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
 
-    /// <summary>Carpeta de copias para un lote, con marca de tiempo; conserva solo las cinco más recientes.</summary>
-    public static string NewBackupRoot(string stateDirectory, DateTime nowUtc)
-    {
-        var parent = Path.Combine(stateDirectory, "BrowserBackups");
-        Directory.CreateDirectory(parent);
-        foreach (var old in new DirectoryInfo(parent).GetDirectories().OrderByDescending(d => d.Name, StringComparer.Ordinal).Skip(4))
-        {
-            try { old.Delete(recursive: true); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
-        }
-        return Path.Combine(parent, nowUtc.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..6]);
-    }
+    /// <summary>
+    /// Ruta de la carpeta de copias de un lote, con marca de tiempo. No toca el disco: la carpeta se crea al copiar la
+    /// primera base, y un fallo al crearla se trata como el de esa copia (la base no se modifica).
+    /// </summary>
+    public static string NewBackupRoot(string stateDirectory, DateTime nowUtc) =>
+        Path.Combine(stateDirectory, "BrowserBackups", nowUtc.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + "-" + Guid.NewGuid().ToString("N")[..6]);
 }

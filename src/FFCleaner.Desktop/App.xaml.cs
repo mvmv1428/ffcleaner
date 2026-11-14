@@ -10,6 +10,7 @@ namespace FFCleaner.Desktop;
 public partial class App : Application
 {
     private DiagnosticsLog _log = DiagnosticsLog.Null;
+    private bool _ready;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -19,10 +20,14 @@ public partial class App : Application
         DispatcherUnhandledException += (_, a) =>
         {
             _log.Write("error", a.Exception.ToString());
-            MessageBox.Show("Error inesperado: " + a.Exception.Message + Environment.NewLine + Environment.NewLine +
-                "Si había una operación en curso pudo quedar incompleta; " +
-                "consulta la bitácora en " + (_log.Path ?? "la carpeta de FFCleaner") + ".", "FFCleaner", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(Loc.T("Error inesperado: ", "Unexpected error: ") + a.Exception.Message + Environment.NewLine + Environment.NewLine +
+                Loc.T("Si había una operación en curso pudo quedar incompleta; consulta la bitácora en ",
+                      "If an operation was running it may be incomplete; see the log at ") +
+                (_log.Path ?? "%LOCALAPPDATA%\\FFCleaner") + ".", "FFCleaner", MessageBoxButton.OK, MessageBoxImage.Warning);
             a.Handled = true;
+            // Si el fallo ocurrió antes de abrir la ventana principal, no queda nada que mostrar: se cierra en lugar de
+            // quedarse como un proceso invisible que, además, impediría actualizar o desinstalar.
+            if (!_ready) Shutdown(1);
         };
 
         IFolderProvider folders;
@@ -67,15 +72,21 @@ public partial class App : Application
 
         // Actualizaciones: del repositorio configurado al compilar; en sandbox, solo con una fuente de prueba local.
         // Se buscan ANTES de abrir la ventana principal: si hay versión nueva, se instala y FFCleaner se reabre ya actualizado.
+        // Abierto como administrador no se actualiza: el instalador correría elevado sobre una carpeta que el usuario
+        // puede modificar. Se hará en el próximo arranque normal.
         var updater = new UpdateService(_log, folders.IsSandbox ? null : UpdateService.ConfiguredRepository(), launch.UpdateFeed);
-        if (settings.AutoUpdate && await UpdateWindow.TryUpdateAsync(updater, UiPolicy.RelaunchArguments(e.Args), _log))
+        if (settings.AutoUpdate && !RegistryScope.IsElevated &&
+            await UpdateWindow.TryUpdateAsync(updater, UiPolicy.RelaunchArguments(e.Args), _log, folders.StateDirectory))
         {
             Shutdown(0);
             return;
         }
 
         IAnalysisService analysis = new FileAnalysisService(folders, settings.Exclusions, log: _log);
-        IFileCleaningService cleaning = new FileCleaningService(folders, _log, processes: new SystemProcessProbe());
+        var fileCleaning = new FileCleaningService(folders, _log, processes: new SystemProcessProbe());
+        // Copias de bases de navegador que ya no hacen falta (las versiones anteriores las guardaban siempre).
+        _ = Task.Run(fileCleaning.PruneBrowserBackups);
+        IFileCleaningService cleaning = fileCleaning;
         var catalog = analysis.Discover();
         var saved = settings.SelectedTargets.Select(t => TargetKey.TryParse(t, out var key) ? key : (TargetKey?)null).OfType<TargetKey>();
         var selection = new SelectionModel(catalog, saved);
@@ -106,5 +117,6 @@ public partial class App : Application
         MainWindow.Closed += (_, _) => workflow.Dispose();
         ShutdownMode = ShutdownMode.OnMainWindowClose;
         MainWindow.Show();
+        _ready = true;
     }
 }

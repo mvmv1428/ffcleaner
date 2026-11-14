@@ -154,14 +154,66 @@ public sealed class UpdateService
     }
 
     /// <summary>Lanza el instalador de la versión nueva: espera a que FFCleaner se cierre, actualiza y lo vuelve a abrir.</summary>
-    public void LaunchInstaller(string setup, IEnumerable<string> relaunchArguments)
+    public void LaunchInstaller(string setup, IEnumerable<string> relaunchArguments, Version target)
     {
         var start = new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(setup)! };
+        // --target-version: la versión publicada que se intenta instalar; si falla, el instalador anota esa (no la suya).
         foreach (var arg in new[] { "--update", "--quiet", "--show-progress", "--dest", InstallDirectory, "--wait-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                                    "--target-version", Normalize(target).ToString(3),
                                     "--launch-args", string.Join(' ', relaunchArguments.Select(Quote)) })
             start.ArgumentList.Add(arg);
         Process.Start(start);
         _log.Write("actualizacion", "instalador lanzado: " + setup);
+    }
+
+    /// <summary>Archivo donde el instalador anota una actualización fallida (en la carpeta de datos), para no reintentarla en bucle.</summary>
+    public const string FailedMarkerName = "update-failed.json";
+
+    /// <summary>
+    /// ¿Falló la instalación de esta versión hace menos de 24 horas? Así un fallo persistente (disco lleno, un antivirus)
+    /// no se repite en cada arranque. Si la versión anotada ya no es más nueva que la actual, el aviso se retira.
+    /// </summary>
+    public static bool RecentlyFailed(string stateDirectory, Version candidate, DateTime nowUtc)
+    {
+        var path = Path.Combine(stateDirectory, FailedMarkerName);
+        try
+        {
+            if (!File.Exists(path)) return false;
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            var root = doc.RootElement;
+            var version = root.TryGetProperty("version", out var v) && Version.TryParse(v.GetString(), out var parsed) ? Normalize(parsed) : null;
+            var when = root.TryGetProperty("utc", out var u) && u.TryGetDateTime(out var date) ? date.ToUniversalTime() : (DateTime?)null;
+            if (version is null || when is null || version <= Normalize(Current))
+            {
+                File.Delete(path);
+                return false;
+            }
+            return version == Normalize(candidate) && nowUtc - when.Value < TimeSpan.FromHours(24);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Otra copia de FFCleaner abierta desde la carpeta instalada: una ventana o el servidor MCP de un agente. Mientras
+    /// siga abierta no se pueden sustituir sus archivos, así que no se descarga nada. Si no se puede leer la ruta de un
+    /// proceso con ese nombre (por ejemplo, uno abierto como administrador), se considera abierta.
+    /// </summary>
+    public static string? OtherInstanceRunning()
+    {
+        var prefix = InstallDirectory + "\\";
+        foreach (var name in new[] { "FFCleaner", "FFCleaner.Mcp" })
+            foreach (var process in Process.GetProcessesByName(name))
+                using (process)
+                {
+                    if (process.Id == Environment.ProcessId) continue;
+                    var path = ProcessImage.PathOf(process);
+                    if (path is null || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        return name == "FFCleaner" ? "otra ventana de FFCleaner" : "el servidor MCP de un agente";
+                }
+        return null;
     }
 
     private void CheckOrigin(Uri url)
@@ -174,7 +226,8 @@ public sealed class UpdateService
         else if (!url.IsLoopback) throw new InvalidOperationException("Origen de prueba no permitido: " + url);
     }
 
-    private static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build));
+    /// <summary>Versión de tres partes (0.3.3 y 0.3.3.0 son la misma).</summary>
+    internal static Version Normalize(Version v) => new(v.Major, v.Minor, Math.Max(0, v.Build));
 
     private static string Quote(string arg) => arg.Contains(' ') || arg.Contains('"') ? "\"" + arg.Replace("\"", "\\\"") + "\"" : arg;
 }

@@ -56,8 +56,60 @@ internal static class FeatureTests
         return new(fixture, analysis, selection, cleaning, new CleanupWorkflow(selection, analysis, cleaning));
     }
 
+    private static string[] BackupFiles(Env env) =>
+        Directory.Exists(env.Cleaning.BrowserBackupDirectory)
+            ? Directory.GetFiles(env.Cleaning.BrowserBackupDirectory, "*", SearchOption.AllDirectories)
+            : [];
+
     public static void Register(TestRunner tests)
     {
+        // ───────────── Auditoría M3: un fallo al copiar una base no corta el lote ─────────────
+        tests.Add("M3_si_no_se_puede_copiar_la_base_no_se_toca_y_el_resto_del_lote_sigue", async () =>
+        {
+            using var env = Setup();
+            var profile = env.Fixture.Profile("chrome", "Default");
+            // Un archivo con el nombre de la carpeta de copias impide crearla (como un disco lleno o sin permisos).
+            Directory.CreateDirectory(env.Fixture.Folders.StateDirectory);
+            File.WriteAllText(env.Cleaning.BrowserBackupDirectory, "bloquea la carpeta de copias");
+            env.Selection.SetTarget(K("chrome", "history"), true);
+            env.Selection.SetTarget(K("chrome", "cache"), true);
+            await env.Workflow.AnalyzeAsync();
+            var report = await env.Workflow.CleanAsync();
+            var history = report.Targets.Single(t => t.Key.CategoryId == "history");
+            var cache = report.Targets.Single(t => t.Key.CategoryId == "cache");
+            Check.True(history.Failed > 0 && history.Details.Single().Detail.Contains("No se pudo copiar"), "El historial queda en error y lo explica: " + history.Details.Single().Detail);
+            Check.Equal(5L, BrowserDbFixture.Count(Path.Combine(profile, "History"), "urls"), "Sin copia, la base no se modifica");
+            Check.True(cache.Deleted > 0 && cache.DeletedBytes > 0, "La caché del mismo lote se limpia igualmente");
+            Check.Equal(report.DeletedBytes, env.Cleaning.Totals.Read().Bytes, "Lo liberado se suma al total");
+            var journal = File.ReadAllText(report.JournalPath!);
+            Check.True(journal.Contains("\"evento\":\"fin\""), "La bitácora se cierra con su evento «fin»");
+        });
+
+        // ───────────── Auditoría A2: las copias antiguas se borran ─────────────
+        tests.Add("A2_las_copias_de_bases_que_ya_no_hacen_falta_se_borran", () =>
+        {
+            using var env = Setup();
+            var root = env.Cleaning.BrowserBackupDirectory;
+            string Batch(string name, bool keep, TimeSpan age)
+            {
+                var folder = Path.Combine(root, name, "chrome", "Default");
+                Directory.CreateDirectory(folder);
+                File.WriteAllText(Path.Combine(folder, "History"), "historial copiado");
+                if (keep) File.WriteAllText(Path.Combine(folder, "CONSERVAR.txt"), "restauración sin comprobar");
+                Directory.SetCreationTimeUtc(Path.Combine(root, name), DateTime.UtcNow - age);
+                return Path.Combine(root, name);
+            }
+            var legacy = Batch("20261101-100000-aaaaaa", keep: false, TimeSpan.FromDays(2));
+            var running = Batch("20261114-100000-bbbbbb", keep: false, TimeSpan.FromMinutes(5));
+            var needed = Batch("20261110-100000-cccccc", keep: true, TimeSpan.FromDays(4));
+            var expired = Batch("20261001-100000-dddddd", keep: true, TimeSpan.FromDays(40));
+            Check.Equal(2, env.Cleaning.PruneBrowserBackups(), "Se borran dos lotes");
+            Check.True(!Directory.Exists(legacy), "Copia de una versión anterior (sin aviso de conservar): borrada");
+            Check.True(Directory.Exists(running), "Copia de la última hora (puede ser de una limpieza en curso en otro proceso): se respeta");
+            Check.True(Directory.Exists(needed), "Copia necesaria para recuperar una base: se conserva");
+            Check.True(!Directory.Exists(expired), "Copia necesaria de hace más de 30 días: borrada");
+        });
+
         // ───────────── A7: datos de navegador ─────────────
         tests.Add("A7_historial_y_cookies_se_borran_dentro_de_las_bases_sin_tocar_descargas_formularios_ni_contrasenas", async () =>
         {
@@ -98,9 +150,9 @@ internal static class FeatureTests
                 Check.Equal(hash, SandboxFixture.HashTree(profile)[name], "Intacto: " + name);
             Check.SameTree(other, SandboxFixture.HashTree(env.Fixture.Profile("chrome", "Profile 1")), "Perfil no marcado");
             Check.SameTree(brave, SandboxFixture.HashTree(env.Fixture.UserData("brave")), "Brave");
-            var backups = Directory.GetFiles(env.Cleaning.BrowserBackupDirectory, "*", SearchOption.AllDirectories);
-            Check.True(backups.Any(b => b.EndsWith(@"\History")) && backups.Any(b => b.EndsWith(@"\Cookies")), "Copia de seguridad de cada base antes de tocarla");
-            Check.Equal(5L, BrowserDbFixture.Count(backups.First(b => b.EndsWith(@"\History")), "urls"), "La copia guarda el estado anterior");
+            // La copia previa solo sirve para deshacer un fallo: si todo sale bien se borra y el historial no queda guardado en FFCleaner.
+            Check.Equal(0, BackupFiles(env).Length, "Tras una limpieza correcta no queda ninguna copia de las bases");
+            Check.True(report.Targets.All(t => t.Details.All(d => d.Detail.Contains("copia temporal"))), "El resultado dice que la copia temporal también se borró");
         });
 
         tests.Add("A7_descargas_formularios_y_sesiones_tocan_solo_lo_suyo", async () =>
@@ -147,6 +199,7 @@ internal static class FeatureTests
                 using (BrowserDbFixture.LockExclusive(cookies)) report = await env.Workflow.CleanAsync();
                 Check.True(report.Targets.Single().Locked > 0, "Base bloqueada: " + report.Targets.Single().Details.Single().Detail);
                 Check.Equal(4L, BrowserDbFixture.Count(cookies, "cookies"), "Cookies intactas");
+                Check.Equal(0, BackupFiles(env).Length, "Sin modificar la base, la copia previa no se conserva");
                 Check.Equal("ok", BrowserDbFixture.Integrity(cookies), "Base íntegra");
             }
             using (var env = Setup())
@@ -195,9 +248,7 @@ internal static class FeatureTests
             Check.Equal(0L, BrowserDbFixture.Count(cookies, "moz_cookies"), "Cookies borradas");
             Check.Equal("ok", BrowserDbFixture.Integrity(places), "Integridad de places.sqlite");
             Check.True(File.ReadAllBytes(Path.Combine(roaming, "logins.json")).SequenceEqual(logins) && File.ReadAllBytes(Path.Combine(roaming, "key4.db")).SequenceEqual(keys), "Contraseñas y claves intactas");
-            var backups = Directory.GetFiles(env.Cleaning.BrowserBackupDirectory, "*", SearchOption.AllDirectories);
-            Check.True(backups.Any(b => b.EndsWith(@"\places.sqlite")) && backups.Any(b => b.EndsWith(@"\cookies.sqlite")), "Copia de cada base antes de tocarla");
-            Check.Equal(6L, BrowserDbFixture.Count(backups.First(b => b.EndsWith(@"\places.sqlite")), "moz_historyvisits"), "La copia guarda el estado anterior");
+            Check.Equal(0, BackupFiles(env).Length, "Tras una limpieza correcta no queda copia de places.sqlite ni de cookies.sqlite");
         });
 
         tests.Add("Total_liberado_se_acumula_y_se_siembra_desde_las_bitacoras_sin_contar_dos_veces", async () =>

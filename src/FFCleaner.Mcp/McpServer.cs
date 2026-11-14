@@ -14,6 +14,9 @@ namespace FFCleaner.Mcp;
 /// <item>Datos personales del navegador y modelos de IA solo con permiso expreso (allow_personal_data / allow_models).</item>
 /// <item>El Registro solo repara hallazgos «Seguro», con respaldo verificado antes; restaurar nunca sobrescribe.</item>
 /// <item>Programas de inicio: solo activar o desactivar (reversible); nunca se borra una entrada.</item>
+/// <item>Los parámetros allow_* y confirm los pone el propio agente: borrar datos personales o modelos y cambiar el Registro
+/// exigen además que el usuario lo haya permitido en FFCleaner > Configuración (settings.json, desactivado por defecto).</item>
+/// <item>Respeta las rutas protegidas (exclusiones) guardadas en los ajustes, igual que la aplicación.</item>
 /// </list>
 /// </summary>
 public sealed class McpServer
@@ -31,6 +34,8 @@ public sealed class McpServer
     private readonly StartupManager _startup;
     private readonly Dictionary<string, AnalysisSession> _analyses = [];
     private readonly Dictionary<string, RegistryScanResult> _scans = [];
+    private readonly string _settingsPath;
+    private readonly string? _settingsProblem;
     private SelectionModel _selection;
     private CleanupWorkflow _workflow;
 
@@ -40,7 +45,10 @@ public sealed class McpServer
         _scope = scope;
         _log = new DiagnosticsLog(Path.Combine(folders.StateDirectory, "Logs", "ffcleaner.log"));
         void Trace(string message) => _log.Write("mcp", message);
-        _analysis = new FileAnalysisService(folders, log: _log);
+        // Las rutas protegidas guardadas en los ajustes valen también para los agentes.
+        _settingsPath = Path.Combine(folders.StateDirectory, "settings.json");
+        var settings = LoadSettings(out _settingsProblem);
+        _analysis = new FileAnalysisService(folders, settings.Exclusions, log: _log);
         _cleaning = new FileCleaningService(folders, _log, processes: new SystemProcessProbe());
         (_selection, _workflow) = Rebuild();
         _scanner = new RegistryScanner(scope, trace: Trace);
@@ -85,7 +93,38 @@ public sealed class McpServer
         {
             return Error(id, -32602, ex.Message);
         }
+        catch (Exception ex)
+        {
+            // Un error imprevisto (disco lleno, permisos…) se devuelve al agente; el servidor sigue en marcha.
+            _log.Write("mcp", "error interno en " + method + ": " + ex);
+            return Error(id, -32603, "Error interno: " + ex.Message);
+        }
     }
+
+    // ───────────────────────────── Ajustes y permisos ─────────────────────────────
+
+    private const string PersonalNotAllowed =
+        "El usuario no ha permitido que los agentes borren datos personales del navegador ni modelos de IA. " +
+        "Puede activarlo en FFCleaner > Configuración > Agentes de IA; no lo actives tú ni edites sus ajustes.";
+
+    private const string RegistryNotAllowed =
+        "El usuario no ha permitido que los agentes cambien el Registro. Puede activarlo en FFCleaner > Configuración > " +
+        "Agentes de IA; no lo actives tú ni edites sus ajustes. scan_registry (solo lectura) sí está disponible.";
+
+    private UserSettings LoadSettings(out string? problem)
+    {
+        problem = null;
+        try { return new SettingsStore(_settingsPath).Load(); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ArgumentException or System.ComponentModel.Win32Exception)
+        {
+            problem = "No se pueden leer los ajustes de FFCleaner (" + ex.Message + ")";
+            _log.Write("mcp", problem);
+            return UserSettings.Empty;
+        }
+    }
+
+    /// <summary>Permisos vigentes: se leen en cada llamada, así un cambio en Configuración vale sin reiniciar el servidor.</summary>
+    private UserSettings Permissions() => LoadSettings(out _);
 
     private static JsonObject Initialize(JsonObject? parameters)
     {
@@ -99,7 +138,9 @@ public sealed class McpServer
                 "FFCleaner libera espacio y repara el Registro de Windows de forma segura. Flujo de limpieza: list_cleanup_targets → analyze_cleanup " +
                 "(no borra nada) → muestra al usuario cuánto se libera → clean con el analysis_id y confirm=true. Registro: scan_registry → " +
                 "repair_registry (solo hallazgos «Seguro», con respaldo) → restore_registry_backup si hace falta deshacer. No pidas datos personales " +
-                "(historial, cookies, sesiones, formularios) ni modelos de IA salvo que el usuario lo pida expresamente.",
+                "(historial, cookies, sesiones, formularios) ni modelos de IA salvo que el usuario lo pida expresamente. Borrar datos personales o " +
+                "modelos y cambiar el Registro requieren además que el usuario lo permita en FFCleaner > Configuración > Agentes de IA; " +
+                "list_cleanup_targets indica esos permisos en agent_permissions. Nunca los actives tú ni edites los ajustes de FFCleaner.",
         };
     }
 
@@ -120,8 +161,8 @@ public sealed class McpServer
             {
                 ["preset"] = Prop("string", "«safe»: todas las categorías normales (cachés y temporales). Nunca incluye datos personales ni modelos."),
                 ["targets"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "Claves de objetivos." },
-                ["allow_personal_data"] = Prop("boolean", "Permite historial, descargas, cookies, sesiones y formularios del navegador. Solo si el usuario lo pidió."),
-                ["allow_models"] = Prop("boolean", "Permite modelos y datasets de IA descargados (muy grandes). Solo si el usuario lo pidió."),
+                ["allow_personal_data"] = Prop("boolean", "Permite historial, descargas, cookies, sesiones y formularios del navegador. Solo si el usuario lo pidió y lo permite en Configuración."),
+                ["allow_models"] = Prop("boolean", "Permite modelos y datasets de IA descargados (muy grandes). Solo si el usuario lo pidió y lo permite en Configuración."),
             }), readOnly: true),
         Tool("clean", "Limpia lo analizado por analyze_cleanup. Borrado permanente: exige analysis_id vigente y confirm=true. Revalida cada archivo antes de borrarlo.",
             Schema(new() { ["analysis_id"] = Prop("string", "Id devuelto por analyze_cleanup."), ["confirm"] = Prop("boolean", "Debe ser true.") }, "analysis_id", "confirm"), destructive: true),
@@ -131,7 +172,7 @@ public sealed class McpServer
                 ["families"] = new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["description"] = "apppaths, uninstall, fileassoc, startup, muicache, shareddlls. Por defecto, todas." },
                 ["max_findings"] = Prop("integer", "Máximo de hallazgos devueltos (por defecto 200)."),
             }), readOnly: true),
-        Tool("repair_registry", "Repara hallazgos «Seguro» de un scan_registry. Antes guarda y verifica un respaldo; si falla no cambia nada. Exige confirm=true.",
+        Tool("repair_registry", "Repara hallazgos «Seguro» de un scan_registry. Antes guarda y verifica un respaldo; si falla no cambia nada. Exige confirm=true y que el usuario lo permita en Configuración.",
             Schema(new()
             {
                 ["scan_id"] = Prop("string", "Id devuelto por scan_registry."),
@@ -140,7 +181,7 @@ public sealed class McpServer
                 ["confirm"] = Prop("boolean", "Debe ser true."),
             }, "scan_id", "confirm"), destructive: true),
         Tool("list_registry_backups", "Lista los respaldos del Registro creados por FFCleaner.", Schema(new()), readOnly: true),
-        Tool("restore_registry_backup", "Restaura un respaldo del Registro. Solo recrea lo que falta; nunca sobrescribe datos que cambiaron. Exige confirm=true.",
+        Tool("restore_registry_backup", "Restaura un respaldo del Registro. Solo recrea lo que falta; nunca sobrescribe datos que cambiaron. Exige confirm=true y que el usuario lo permita en Configuración.",
             Schema(new() { ["backup_id"] = Prop("string", "Id de list_registry_backups."), ["confirm"] = Prop("boolean", "Debe ser true.") }, "backup_id", "confirm")),
         Tool("list_startup_programs", "Lista los programas que se inician con Windows y si están activos. Solo lectura.", Schema(new()), readOnly: true),
         Tool("set_startup_program", "Activa o desactiva un programa de inicio de forma reversible (mismo mecanismo que el Administrador de tareas). No borra nada.",
@@ -214,9 +255,16 @@ public sealed class McpServer
     {
         if (refresh) (_selection, _workflow) = Rebuild();
         var catalog = _selection.Catalog;
+        var permissions = Permissions();
         return new
         {
             elevated = RegistryScope.IsElevated,
+            agent_permissions = new
+            {
+                personal_data_and_models = permissions.AgentsMayDeletePersonalData,
+                registry_changes = permissions.AgentsMayChangeRegistry,
+                how_to_change = "Solo el usuario, en FFCleaner > Configuración > Agentes de IA.",
+            },
             notes = catalog.Notes,
             apps = catalog.Apps.Select(a => new
             {
@@ -244,6 +292,8 @@ public sealed class McpServer
         var targets = Strings(input, "targets");
         if (preset is null && targets.Count == 0) throw new ToolRefusal("Indica preset=\"safe\" o una lista de targets; no se analiza nada de forma implícita.");
         if (preset is not null && preset != "safe") throw new ToolRefusal("Preset desconocido: " + preset + ". Solo existe «safe».");
+        if (_settingsProblem is not null) throw new ToolRefusal(_settingsProblem + ": sin las rutas protegidas del usuario no se analiza para limpiar.");
+        if ((allowPersonal || allowModels) && !Permissions().AgentsMayDeletePersonalData) throw new ToolRefusal(PersonalNotAllowed);
 
         _selection.Clear();
         if (preset == "safe") _selection.SelectAll();
@@ -323,6 +373,10 @@ public sealed class McpServer
             throw new ToolRefusal("analysis_id desconocido, ya usado o sustituido por otro análisis. Vuelve a llamar a analyze_cleanup.");
         var blocker = _workflow.CleanBlocker();
         if (blocker is not null) throw new ToolRefusal(blocker);
+        // El permiso se vuelve a comprobar al limpiar: el usuario puede haberlo retirado después del análisis.
+        if (session.Targets.Any(t => RiskOf(t.Target.Key) is CategoryRisk.DatosPersonales or CategoryRisk.MuyGrande) &&
+            !Permissions().AgentsMayDeletePersonalData)
+            throw new ToolRefusal(PersonalNotAllowed);
         _analyses.Remove(id);
         var report = await _workflow.CleanAsync();
         if (report.Refused) throw new ToolRefusal("No se limpió nada: " + report.Refusal);
@@ -375,6 +429,7 @@ public sealed class McpServer
 
     private async Task<object> RepairAsync(JsonObject input)
     {
+        if (!Permissions().AgentsMayChangeRegistry) throw new ToolRefusal(RegistryNotAllowed);
         if (!Bool(input, "confirm")) throw new ToolRefusal("Reparar modifica el Registro: repite la llamada con confirm=true cuando el usuario lo haya aprobado.");
         var scanId = input["scan_id"]?.GetValue<string>() ?? throw new ToolRefusal("Falta scan_id.");
         if (!_scans.TryGetValue(scanId, out var scan)) throw new ToolRefusal("scan_id desconocido o sustituido; vuelve a llamar a scan_registry.");
@@ -408,6 +463,7 @@ public sealed class McpServer
 
     private async Task<object> RestoreAsync(JsonObject input)
     {
+        if (!Permissions().AgentsMayChangeRegistry) throw new ToolRefusal(RegistryNotAllowed);
         if (!Bool(input, "confirm")) throw new ToolRefusal("Restaurar modifica el Registro: repite la llamada con confirm=true.");
         var id = input["backup_id"]?.GetValue<string>() ?? throw new ToolRefusal("Falta backup_id.");
         var backup = _backups.List().FirstOrDefault(b => b.BackupId.ToString("N") == id.Replace("-", "", StringComparison.Ordinal))

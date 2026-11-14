@@ -62,7 +62,6 @@ public static class CleaningGuard
         return false;
     }
 
-    /// <summary>Veredicto por nombre y antigüedad. No consulta el disco.</summary>
     /// <summary>
     /// Igual que <see cref="IsSensitiveDirectory(string, string)"/>, pero en una categoría sin reglas de nombres
     /// solo se exige que la carpeta esté dentro de su ámbito.
@@ -70,6 +69,7 @@ public static class CleaningGuard
     public static bool IsSensitiveDirectory(string directory, string anchor, CleaningPolicy policy) =>
         policy.NameGuards ? IsSensitiveDirectory(directory, anchor) : !PathSafety.IsWithin(directory, anchor);
 
+    /// <summary>Veredicto por nombre y antigüedad. No consulta el disco.</summary>
     public static FileVerdict CheckFile(CleaningPolicy policy, string fileName, DateTime lastWriteUtc, DateTime nowUtc)
     {
         // Un nombre de archivo es un único componente: con separadores o «:» podría nombrar otra carpeta o un flujo.

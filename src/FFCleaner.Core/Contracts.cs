@@ -199,4 +199,13 @@ public sealed record UserSettings(List<string> SelectedTargets, List<string> Exc
 
     /// <summary>Buscar e instalar actualizaciones al abrir FFCleaner.</summary>
     public bool AutoUpdate { get; init; } = true;
+
+    /// <summary>
+    /// Los agentes (servidor MCP) pueden borrar datos personales del navegador y modelos de IA. Desactivado por defecto:
+    /// los permisos que pide un agente (allow_personal_data, confirm…) los pone el propio agente, no el usuario.
+    /// </summary>
+    public bool AgentsMayDeletePersonalData { get; init; }
+
+    /// <summary>Los agentes pueden reparar el Registro y restaurar sus respaldos. Desactivado por defecto.</summary>
+    public bool AgentsMayChangeRegistry { get; init; }
 }

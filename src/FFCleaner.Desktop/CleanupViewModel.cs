@@ -525,6 +525,14 @@ public sealed class CleanupViewModel : ObservableObject
                 report.Cancelled || report.NotDeleted > 0 ? NoticeKind.Aviso : NoticeKind.Exito));
         }
         catch (InvalidOperationException error) { Status = error.Message; }
+        catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException)
+        {
+            // El motor ya anotó lo borrado hasta el fallo en la bitácora y en el total.
+            _log.Write("interfaz", "limpieza interrumpida: " + error);
+            Status = Loc.T("La limpieza se interrumpió por un error de archivo: ", "Cleaning stopped because of a file error: ") + error.Message +
+                     Loc.T(" Vuelve a analizar para ver lo que queda.", " Analyze again to see what is left.");
+            UpdateTotals();
+        }
         finally { IsBusy = false; }
     }
 

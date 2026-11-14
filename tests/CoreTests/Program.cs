@@ -609,6 +609,23 @@ tests.Add("ajustes_v1_se_migran_conservando_exclusiones_y_copia", () =>
     Check.Equal(original, File.ReadAllText(store.LegacyBackupPath), "La copia no se reescribe");
 });
 
+tests.Add("ajustes_permisos_de_agentes_desactivados_salvo_true_explicito", () =>
+{
+    using var fixture = SandboxFixture.Create();
+    var path = Path.Combine(fixture.Folders.StateDirectory, "settings.json");
+    Directory.CreateDirectory(fixture.Folders.StateDirectory);
+    var store = new SettingsStore(path);
+    File.WriteAllText(path, "{\"SelectedTargets\":[],\"Exclusions\":[],\"RegistryFamilies\":[]}");
+    var loaded = store.Load();
+    Check.True(!loaded.AgentsMayDeletePersonalData && !loaded.AgentsMayChangeRegistry, "Sin la clave, los agentes no tienen permisos");
+    File.WriteAllText(path, "{\"SelectedTargets\":[],\"Exclusions\":[],\"RegistryFamilies\":[],\"AgentsMayDeletePersonalData\":\"true\",\"AgentsMayChangeRegistry\":1}");
+    loaded = store.Load();
+    Check.True(!loaded.AgentsMayDeletePersonalData && !loaded.AgentsMayChangeRegistry, "Un texto o un número no conceden permisos");
+    store.Save(loaded with { AgentsMayDeletePersonalData = true, AgentsMayChangeRegistry = true });
+    loaded = store.Load();
+    Check.True(loaded.AgentsMayDeletePersonalData && loaded.AgentsMayChangeRegistry, "Activados desde Configuración, se guardan y se leen");
+});
+
 tests.Add("ajustes_corruptos_no_se_sobrescriben", () =>
 {
     using var fixture = SandboxFixture.Create();

@@ -33,6 +33,8 @@ public sealed record SetupOptions
     public bool ShowProgress { get; init; }
     /// <summary>Argumentos con los que se vuelve a abrir FFCleaner al terminar.</summary>
     public string? LaunchArguments { get; init; }
+    /// <summary>Versión publicada que se intenta instalar (la que se anota si falla). Sin ella, la del propio instalador.</summary>
+    public string? TargetVersion { get; init; }
 
     /// <summary>En una actualización, toma de install.json las carpetas y accesos que eligió el usuario al instalar.</summary>
     public SetupOptions WithPreviousChoices()
@@ -69,6 +71,7 @@ public sealed record SetupOptions
                 "--show-progress" => o with { ShowProgress = true },
                 "--wait-pid" => o with { WaitPid = int.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture) },
                 "--launch-args" => o with { LaunchArguments = Next() },
+                "--target-version" => o with { TargetVersion = System.Version.TryParse(Next(), out var target) && target.Build >= 0 ? target.ToString(3) : throw new ArgumentException("Versión no válida en --target-version") },
                 "--dest" => o with { Destination = Path.GetFullPath(Next()) },
                 "--start-menu" => o with { StartMenu = Path.GetFullPath(Next()) },
                 "--desktop-dir" => o with { DesktopDirectory = Path.GetFullPath(Next()) },
@@ -85,6 +88,9 @@ public sealed record SetupOptions
     }
 }
 
+/// <summary>FFCleaner (o su servidor MCP) está abierto desde la carpeta que se quiere sustituir o borrar.</summary>
+public sealed class AppRunningException(string message) : InvalidOperationException(message);
+
 /// <summary>Lo que se instaló, para poder quitarlo exactamente. Se guarda como install.json en la carpeta instalada.</summary>
 public sealed record InstallManifest(string Version, string Destination, List<string> Shortcuts, string RegistryKey, string DataDirectory);
 
@@ -95,44 +101,87 @@ public static class SetupEngine
     private static readonly string[] ExtraFiles = ["SHA256SUMS.json", "install.json", "uninstall.ps1", "ffcleaner.png"];
     public static string Version => typeof(SetupEngine).Assembly.GetName().Version?.ToString(3) ?? "0";
 
-    /// <summary>Instala desde la carpeta del paquete (la del propio instalador). Devuelve la ruta de FFCleaner.exe.</summary>
+    /// <summary>Marca de la carpeta donde se prepara una versión antes de sustituir la instalada.</summary>
+    private const string StagingMarker = ".ffcleaner-staging";
+
+    /// <summary>
+    /// Instala desde la carpeta del paquete (la del propio instalador). Devuelve la ruta de FFCleaner.exe.
+    /// La versión nueva se copia y se comprueba en una carpeta aparte, junto al destino; solo entonces se cambia por la
+    /// instalada con dos renombrados. Si algo falla antes, la versión instalada sigue intacta y funcionando.
+    /// </summary>
     public static string Install(string source, SetupOptions o, IProgress<(double Percent, string Text)> progress)
     {
-        var dest = o.Destination;
+        var dest = Path.GetFullPath(o.Destination).TrimEnd('\\');
         Report(progress, 2, "Comprobando…");
         EnsureNotRunning(dest);
         var sums = ReadSums(Path.Combine(source, "SHA256SUMS.json")) ?? throw new InvalidOperationException("El paquete del instalador está incompleto (falta SHA256SUMS.json).");
         if (!File.Exists(Path.Combine(source, "FFCleaner.exe"))) throw new InvalidOperationException("El paquete del instalador está incompleto (falta FFCleaner.exe).");
-        if (string.Equals(Path.GetFullPath(source).TrimEnd('\\'), Path.GetFullPath(dest).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(Path.GetFullPath(source).TrimEnd('\\'), dest, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("No se puede instalar sobre la misma carpeta del instalador.");
+        if (Path.GetPathRoot(dest)!.Length >= dest.Length) throw new InvalidOperationException("No se puede instalar en la raíz de una unidad.");
 
-        if (File.Exists(Path.Combine(dest, "SHA256SUMS.json")))
-        {
-            Report(progress, 5, "Retirando la versión instalada…");
-            RemoveInstalledFiles(dest);
-        }
-        else if (Directory.Exists(dest) && Directory.EnumerateFileSystemEntries(dest).Any())
+        RecoverInterruptedSwap(dest);
+        if (!File.Exists(Path.Combine(dest, "SHA256SUMS.json")) && Directory.Exists(dest) && Directory.EnumerateFileSystemEntries(dest).Any())
             throw new InvalidOperationException("La carpeta " + dest + " no está vacía y no es una instalación de FFCleaner. Elige otra.");
 
-        Directory.CreateDirectory(dest);
-        var files = sums.Keys.ToList();
-        for (var i = 0; i < files.Count; i++)
+        // 1. La versión nueva se prepara aparte. Misma carpeta superior que el destino, así que el cambio es un renombrado.
+        var suffix = "-" + Guid.NewGuid().ToString("N")[..8];
+        var staging = dest + ".nueva" + suffix;
+        Directory.CreateDirectory(staging);
+        File.WriteAllText(Path.Combine(staging, StagingMarker), "Versión de FFCleaner en preparación. Se puede borrar.");
+        try
         {
-            // Un nombre del paquete no puede salir de la carpeta de destino.
-            if (!TryCombineInside(dest, files[i], out var target) ||
-                !TryCombineInside(source, files[i], out var origin) || !File.Exists(origin))
-                throw new InvalidOperationException("El paquete contiene una ruta no válida: " + files[i]);
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.Copy(origin, target, overwrite: true);
-            if (i % 20 == 0) Report(progress, 8 + 72.0 * i / files.Count, $"Copiando archivos… {i + 1} de {files.Count}");
-        }
-        File.Copy(Path.Combine(source, "SHA256SUMS.json"), Path.Combine(dest, "SHA256SUMS.json"), overwrite: true);
+            var files = sums.Keys.ToList();
+            for (var i = 0; i < files.Count; i++)
+            {
+                // Un nombre del paquete no puede salir de la carpeta de destino.
+                if (!TryCombineInside(staging, files[i], out var target) ||
+                    !TryCombineInside(source, files[i], out var origin) || !File.Exists(origin))
+                    throw new InvalidOperationException("El paquete contiene una ruta no válida: " + files[i]);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(origin, target, overwrite: true);
+                if (i % 20 == 0) Report(progress, 5 + 70.0 * i / files.Count, $"Copiando archivos… {i + 1} de {files.Count}");
+            }
+            File.Copy(Path.Combine(source, "SHA256SUMS.json"), Path.Combine(staging, "SHA256SUMS.json"), overwrite: true);
 
-        Report(progress, 82, "Comprobando la integridad de lo instalado…");
-        foreach (var (name, hash) in sums)
-            if (!TryCombineInside(dest, name, out var copied) ||
-                !string.Equals(Hash(copied), hash, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("El archivo " + name + " no se copió correctamente. Vuelve a ejecutar el instalador.");
+            Report(progress, 76, "Comprobando la integridad de la versión nueva…");
+            foreach (var (name, hash) in sums)
+                if (!TryCombineInside(staging, name, out var copied) ||
+                    !string.Equals(Hash(copied), hash, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("El archivo " + name + " no se copió correctamente. Vuelve a ejecutar el instalador.");
+            File.Delete(Path.Combine(staging, StagingMarker));
+
+            // 2. Cambio: la instalada se aparta y la nueva ocupa su lugar. Si el segundo paso falla, se deshace el primero.
+            Report(progress, 84, "Sustituyendo la versión instalada…");
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            string? previous = null;
+            if (Directory.Exists(dest))
+            {
+                previous = dest + ".anterior" + suffix;
+                try { Directory.Move(dest, previous); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    throw new InvalidOperationException("No se pudo sustituir la versión instalada (" + ex.Message + "). Sigue instalada la de antes, sin cambios.");
+                }
+            }
+            try { Directory.Move(staging, dest); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (previous is not null && !Directory.Exists(dest)) Directory.Move(previous, dest);
+                throw new InvalidOperationException("No se pudo colocar la versión nueva (" + ex.Message + "). Sigue instalada la de antes, sin cambios.");
+            }
+
+            // 3. Se borra lo instalado antes; lo que no era de FFCleaner (si alguien guardó algo ahí) vuelve a la carpeta.
+            if (previous is not null) RetirePrevious(previous, dest);
+        }
+        finally
+        {
+            if (Directory.Exists(staging) && File.Exists(Path.Combine(staging, StagingMarker)))
+                try { Directory.Delete(staging, recursive: true); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            else if (Directory.Exists(staging))
+                try { RemoveInstalledFiles(staging); if (!Directory.EnumerateFileSystemEntries(staging).Any()) Directory.Delete(staging); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
 
         Report(progress, 90, "Creando accesos directos…");
         var exe = Path.Combine(dest, "FFCleaner.exe");
@@ -180,7 +229,9 @@ public static class SetupEngine
         EnsureNotRunning(manifest.Destination);
         EnsureManifestIsSane(manifest, removeData);
         Report(progress, 20, "Quitando accesos directos…");
-        foreach (var link in manifest.Shortcuts) if (File.Exists(link)) File.Delete(link);
+        // install.json se puede editar: solo se borran accesos «FFCleaner.lnk» que apuntan a este FFCleaner.exe.
+        var installedExe = Path.Combine(manifest.Destination, "FFCleaner.exe");
+        foreach (var link in manifest.Shortcuts) if (IsOwnShortcut(link, installedExe)) File.Delete(link);
         Report(progress, 35, "Quitando la entrada de «Aplicaciones instaladas»…");
         Registry.CurrentUser.DeleteSubKeyTree(manifest.RegistryKey, throwOnMissingSubKey: false);
         if (removeData && Directory.Exists(manifest.DataDirectory))
@@ -211,19 +262,117 @@ public static class SetupEngine
             if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
     }
 
+    /// <summary>
+    /// Falla si FFCleaner o su servidor MCP están abiertos desde la carpeta instalada. Un proceso con ese nombre cuya ruta
+    /// no se puede leer cuenta como abierto: es más seguro pedir que se cierre que borrar archivos que podría estar usando.
+    /// </summary>
     private static void EnsureNotRunning(string dest)
     {
         var prefix = Path.GetFullPath(dest).TrimEnd('\\') + "\\";
         foreach (var name in new[] { "FFCleaner", "FFCleaner.Mcp" })
             foreach (var process in Process.GetProcessesByName(name))
+                using (process)
+                {
+                    var path = ProcessImage.PathOf(process);
+                    if (path is null || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        throw new AppRunningException(name == "FFCleaner"
+                            ? "FFCleaner está abierto. Ciérralo y vuelve a intentarlo."
+                            : "Un agente está usando el servidor MCP de FFCleaner. Ciérralo y vuelve a intentarlo.");
+                }
+    }
+
+    /// <summary>
+    /// Si una sustitución anterior se interrumpió entre los dos renombrados (un corte de luz), devuelve la versión
+    /// apartada a su sitio. Después retira las carpetas de preparación y de versiones apartadas que quedaron.
+    /// </summary>
+    private static void RecoverInterruptedSwap(string dest)
+    {
+        var parent = Path.GetDirectoryName(dest)!;
+        if (!Directory.Exists(parent)) return;
+        var name = Path.GetFileName(dest);
+        var previous = Directory.EnumerateDirectories(parent, name + ".anterior-*")
+            .Where(d => File.Exists(Path.Combine(d, "SHA256SUMS.json"))).OrderByDescending(Directory.GetLastWriteTimeUtc).ToList();
+        if (!Directory.Exists(dest) && previous.Count > 0)
+        {
+            Directory.Move(previous[0], dest);
+            previous.RemoveAt(0);
+        }
+        foreach (var old in previous) RetirePrevious(old, dest);
+        foreach (var staging in Directory.EnumerateDirectories(parent, name + ".nueva-*").ToList())
+            try
             {
-                string? path = null;
-                try { path = process.MainModule?.FileName; } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException) { }
-                if (path is not null && path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException(name == "FFCleaner"
-                        ? "FFCleaner está abierto. Ciérralo y pulsa Reintentar."
-                        : "Un agente está usando el servidor MCP de FFCleaner. Ciérralo y pulsa Reintentar.");
+                if (File.Exists(Path.Combine(staging, StagingMarker))) Directory.Delete(staging, recursive: true);
+                else if (File.Exists(Path.Combine(staging, "SHA256SUMS.json")))
+                {
+                    RemoveInstalledFiles(staging);
+                    if (!Directory.EnumerateFileSystemEntries(staging).Any()) Directory.Delete(staging);
+                }
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>
+    /// Retira la versión apartada: borra lo que instaló FFCleaner y devuelve a la carpeta instalada lo demás (si alguien
+    /// guardó algo suyo allí). Si algo no se puede retirar ahora, se intentará en la próxima actualización.
+    /// </summary>
+    private static void RetirePrevious(string previous, string dest)
+    {
+        try
+        {
+            RemoveInstalledFiles(previous);
+            if (!Directory.Exists(previous)) return;
+            foreach (var entry in Directory.EnumerateFileSystemEntries(previous).ToList())
+            {
+                var target = Path.Combine(dest, Path.GetFileName(entry));
+                if (File.Exists(target) || Directory.Exists(target)) continue;
+                if (Directory.Exists(entry)) Directory.Move(entry, target);
+                else File.Move(entry, target);
+            }
+            if (!Directory.EnumerateFileSystemEntries(previous).Any()) Directory.Delete(previous);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>¿Es un acceso directo «FFCleaner.lnk» que abre exactamente este FFCleaner.exe?</summary>
+    private static bool IsOwnShortcut(string link, string exe)
+    {
+        try
+        {
+            return Path.GetFileName(link).Equals("FFCleaner.lnk", StringComparison.OrdinalIgnoreCase) && File.Exists(link) &&
+                   string.Equals(Path.GetFullPath(ShortcutTarget(link)), Path.GetFullPath(exe), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Nombre del aviso de actualización fallida en la carpeta de datos (lo lee FFCleaner 0.3.3 o posterior).</summary>
+    public const string FailedMarkerName = "update-failed.json";
+
+    /// <summary>Anota que la instalación de esta versión falló, para que FFCleaner no la reintente en bucle durante 24 horas.</summary>
+    public static void RecordFailedUpdate(string dataDirectory, string? targetVersion, string reason)
+    {
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            File.WriteAllText(Path.Combine(dataDirectory, FailedMarkerName), JsonSerializer.Serialize(new Dictionary<string, string>
+            {
+                ["version"] = targetVersion ?? Version, ["utc"] = DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture), ["motivo"] = reason,
+            }));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>¿La versión instalada sabe leer el aviso de fallo (0.3.3 o posterior)? Si no, reabrirla repetiría el intento.</summary>
+    public static bool UnderstandsFailedMarker(string exe)
+    {
+        try
+        {
+            var info = FileVersionInfo.GetVersionInfo(exe);
+            return new Version(info.FileMajorPart, info.FileMinorPart, info.FileBuildPart) >= new Version(0, 3, 3);
+        }
+        catch (FileNotFoundException) { return false; }
     }
 
     private static Dictionary<string, string>? ReadSums(string path) =>
@@ -279,8 +428,8 @@ public static class SetupEngine
     }
 
     /// <summary>
-    /// Solo se borran datos propios: la carpeta «FFCleaner» del perfil o una carpeta dentro del temporal
-    /// (el sandbox de las pruebas). Nunca Documentos, Escritorio, una raíz de unidad o el perfil completo.
+    /// Solo se borran datos propios: exactamente %LOCALAPPDATA%\FFCleaner, o una carpeta dentro de un sandbox de
+    /// pruebas. Nunca otra carpeta que se llame igual, Documentos, Escritorio, una raíz de unidad o el perfil completo.
     /// </summary>
     private static bool OnlyOwnData(string? dataDirectory)
     {
@@ -291,14 +440,15 @@ public static class SetupEngine
             var root = Path.GetPathRoot(full)!;
             if (full.Length <= root.Length + 1) return false;
             if (System.IO.Directory.Exists(full) && (File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0) return false;
-            static bool Inside(string path, string? parent) =>
-                !string.IsNullOrEmpty(parent) && path.StartsWith(Path.GetFullPath(parent).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
-            var temp = Path.GetTempPath();
+            // La carpeta de datos real, exacta…
             var defaultData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), KeyName);
-            return Path.GetFileName(full).Equals(KeyName, StringComparison.OrdinalIgnoreCase) ||
-                   Inside(full, temp) ||
-                   full.Equals(Path.GetFullPath(defaultData).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase) ||
-                   Inside(full, defaultData);
+            if (full.Equals(Path.GetFullPath(defaultData).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase)) return true;
+            // …o una carpeta dentro de un sandbox de pruebas (%TEMP%\ffcleaner-sandbox-* con su archivo marcador).
+            var temp = Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\') + "\\";
+            if (!full.StartsWith(temp, StringComparison.OrdinalIgnoreCase)) return false;
+            var sandbox = full[temp.Length..].Split('\\');
+            return sandbox.Length > 1 && sandbox[0].StartsWith("ffcleaner-sandbox-", StringComparison.OrdinalIgnoreCase) &&
+                   File.Exists(Path.Combine(temp, sandbox[0], ".ffcleaner-sandbox"));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { return false; }
     }

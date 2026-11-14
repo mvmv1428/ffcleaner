@@ -53,6 +53,20 @@ public sealed class SettingsViewModel : ObservableObject
         get => _settings.Current.AutoUpdate;
         set { if (value == AutoUpdate) return; _settings.Update(s => s with { AutoUpdate = value }); Raise(); Status = Loc.T("Preferencia de actualizaciones guardada.", "Update preference saved."); }
     }
+    /// <summary>Permiso para que los agentes borren datos personales del navegador y modelos de IA (desactivado por defecto).</summary>
+    public bool AgentsMayDeletePersonalData
+    {
+        get => _settings.Current.AgentsMayDeletePersonalData;
+        set { if (value == AgentsMayDeletePersonalData) return; _settings.Update(s => s with { AgentsMayDeletePersonalData = value }); Raise(); Status = Loc.T("Permiso de los agentes guardado.", "Agent permission saved."); }
+    }
+
+    /// <summary>Permiso para que los agentes reparen el Registro y restauren sus respaldos (desactivado por defecto).</summary>
+    public bool AgentsMayChangeRegistry
+    {
+        get => _settings.Current.AgentsMayChangeRegistry;
+        set { if (value == AgentsMayChangeRegistry) return; _settings.Update(s => s with { AgentsMayChangeRegistry = value }); Raise(); Status = Loc.T("Permiso de los agentes guardado.", "Agent permission saved."); }
+    }
+
     public string Status { get => _status; private set => Set(ref _status, value); }
 
     public bool IsThemeSystem { get => Theme == "system"; set { if (value) Theme = "system"; } }

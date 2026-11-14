@@ -38,8 +38,8 @@ LIMPIEZA PERSONALIZADA
 4. Pulsa Limpiar seleccionados y confirma. Si cambias cualquier casilla, hay que volver a analizar.
 Por defecto («Marcar todo» incluido) solo se marcan cachés y temporales. Historial, descargas, cookies,
 sesiones y formularios de cada navegador, y los modelos de IA, se marcan uno a uno a propósito. Esos datos se
-borran solo con el navegador cerrado, dentro de sus bases (sin borrar el archivo) y tras copiarlas en
-BrowserBackups. Las contraseñas, marcadores, tarjetas y direcciones guardadas nunca se tocan, ni nada de un
+borran solo con el navegador cerrado, dentro de sus bases (sin borrar el archivo) y tras una copia temporal
+que se borra al terminar (solo se conserva si no se pudo comprobar que la base quedó bien). Las contraseñas, marcadores, tarjetas y direcciones guardadas nunca se tocan, ni nada de un
 navegador o perfil sin marcar. Las categorías «Administrador» de Windows requieren reiniciar como administrador.
 La limpieza es permanente (no pasa por la Papelera). Cada lote deja una bitácora.
 
@@ -65,14 +65,15 @@ AGENTES DE IA (MCP)
 FFCleaner.Mcp.exe es un servidor MCP para agentes de programación (Claude Code, Codex, Cursor…). Para Claude Code:
   claude mcp add ffcleaner -- "<carpeta>\\FFCleaner.Mcp.exe"
 Configuración > Agentes de IA copia el comando o el JSON con la ruta correcta. El agente siempre analiza antes de
-limpiar (analysis_id de un solo uso, 15 minutos) y debe confirmar con confirm=true; el historial, las cookies y los
-modelos de IA requieren permiso expreso; el Registro solo repara entradas «Seguro» con respaldo verificado.
+limpiar (analysis_id de un solo uso, 15 minutos) y debe confirmar con confirm=true. Borrar historial, cookies o
+modelos de IA y cambiar el Registro solo es posible si lo activas en Configuración > Agentes de IA (desactivado por
+defecto); aun así, el Registro solo repara entradas «Seguro» con respaldo verificado.
 
 DÓNDE GUARDA SUS DATOS
 %LOCALAPPDATA%\\FFCleaner\\settings.json          selección guardada
 %LOCALAPPDATA%\\FFCleaner\\Journal\\               bitácoras de limpieza
 %LOCALAPPDATA%\\FFCleaner\\RegistryBackups\\       respaldos del Registro
-%LOCALAPPDATA%\\FFCleaner\\BrowserBackups\\        copias de las bases del navegador (últimos 5 lotes)
+%LOCALAPPDATA%\\FFCleaner\\BrowserBackups\\        copias temporales de las bases del navegador
 %LOCALAPPDATA%\\FFCleaner\\Logs\\ffcleaner.log     diagnóstico y tiempos por fase
 Para desinstalar: borra esta carpeta y, si quieres, %LOCALAPPDATA%\\FFCleaner.
 Si usabas la versión anterior (Claro), en el primer arranque se copian sus ajustes, bitácoras y respaldos

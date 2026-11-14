@@ -38,6 +38,9 @@ public sealed class SettingsStore
                 Theme = Choice(root, "Theme", ["system", "light", "dark"], "system"),
                 Language = Choice(root, "Language", ["es", "en"], "es"),
                 AutoUpdate = !root.TryGetProperty("AutoUpdate", out var auto) || auto.ValueKind != JsonValueKind.False,
+                // Permisos de los agentes: solo un «true» explícito los concede.
+                AgentsMayDeletePersonalData = root.TryGetProperty("AgentsMayDeletePersonalData", out var personal) && personal.ValueKind == JsonValueKind.True,
+                AgentsMayChangeRegistry = root.TryGetProperty("AgentsMayChangeRegistry", out var registry) && registry.ValueKind == JsonValueKind.True,
             };
             return (settings, legacy);
         }

@@ -501,7 +501,7 @@
       </StackPanel>
       <TextBlock DockPanel.Dock="Left" Text="&#xE777;" Style="{StaticResource SectionGlyph}"/>
       <TextBlock DockPanel.Dock="Left" Text="{DynamicResource S.Backups}" Style="{StaticResource SectionLabel}" VerticalAlignment="Center" Margin="0,0,14,0"/>
-      <ComboBox AutomationProperties.AutomationId="BackupsBox" ItemsSource="{Binding Backups}" SelectedItem="{Binding SelectedBackup, Mode=TwoWay}" DisplayMemberPath="Display" Padding="8,6" Margin="0,0,12,0" IsEnabled="{Binding IsIdle}" VerticalAlignment="Center"/>
+      <ComboBox AutomationProperties.AutomationId="BackupsBox" ItemsSource="{Binding Backups}" SelectedItem="{Binding SelectedBackup, Mode=TwoWay}" DisplayMemberPath="Display" Margin="0,0,12,0" IsEnabled="{Binding IsIdle}" VerticalAlignment="Center"/>
      </DockPanel>
     </Border>
 
@@ -673,6 +673,9 @@
         <Button AutomationProperties.AutomationId="CopyMcpJsonButton" Tag="&#xE943;" Content="{DynamicResource S.Settings.CopyJson}" Command="{Binding CopyJsonCommand}"/>
        </StackPanel>
        <TextBlock Text="{Binding McpAvailability}" Foreground="{DynamicResource WarningInk}" FontSize="11.5" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="{Binding HasMcpWarning, Converter={StaticResource Visible}}"/>
+       <TextBlock Text="{DynamicResource S.Settings.AgentsAllow}" Foreground="{DynamicResource InkSoft}" FontSize="12" FontWeight="SemiBold" Margin="0,16,0,8"/>
+       <CheckBox AutomationProperties.AutomationId="AgentsPersonalBox" Style="{StaticResource Switch}" Content="{DynamicResource S.Settings.AgentsPersonal}" IsChecked="{Binding AgentsMayDeletePersonalData, Mode=TwoWay}"/>
+       <CheckBox AutomationProperties.AutomationId="AgentsRegistryBox" Style="{StaticResource Switch}" Content="{DynamicResource S.Settings.AgentsRegistry}" IsChecked="{Binding AgentsMayChangeRegistry, Mode=TwoWay}" Margin="0,8,0,0"/>
        <TextBlock Text="{DynamicResource S.Settings.AgentsSafety}" Style="{StaticResource StatHint}" Margin="0,10,0,0"/>
       </StackPanel>
      </Border>

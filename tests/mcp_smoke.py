@@ -100,6 +100,14 @@ try:
     for i in range(20):
         write(chrome / 'Cache' / 'Cache_Data' / f'f_{i:06x}', 4096)
     write(sandbox / 'Roaming/Claude/Cache/data', 20000)
+    write(sandbox / 'Roaming/Claude/Code Cache/protegido', 20000)
+    # Ajustes del usuario: una ruta protegida (exclusión) y, de momento, ningún permiso para los agentes.
+    settings_path = sandbox / 'State' / 'settings.json'
+
+    def settings(**permissions):
+        settings_path.write_text(json.dumps({'SelectedTargets': [], 'RegistryFamilies': [],
+                                             'Exclusions': [str(sandbox / 'Roaming' / 'Claude' / 'Code Cache')], **permissions}), encoding='utf-8')
+    settings()
     personal_before = {p: (chrome / p).read_bytes() for p in ['Cookies', 'History', 'Login Data', 'Web Data', 'Bookmarks']}
     missing = str(sandbox / 'desinstalado')
     reg_set('HKCU', cv + r'\Run', 'Huerfano', f'"{missing}\\inicio.exe"')
@@ -127,6 +135,10 @@ try:
     check(error, 'analizar sin selección se rechaza (nada implícito)')
     refused, error = client.call('analyze_cleanup', {'targets': ['chrome/history']})
     check(error and 'allow_personal_data' in refused['error'], 'el historial exige permiso expreso')
+    check(catalog['agent_permissions'] == {'personal_data_and_models': False, 'registry_changes': False,
+                                           'how_to_change': catalog['agent_permissions']['how_to_change']}, 'los agentes empiezan sin permisos especiales')
+    refused, error = client.call('analyze_cleanup', {'targets': ['chrome/history'], 'allow_personal_data': True})
+    check(error and 'Configuración' in refused['error'], 'allow_personal_data no basta: el usuario debe permitirlo en Configuración')
     analysis, error = client.call('analyze_cleanup', {'preset': 'safe'})
     target_keys = [t['key'] for t in analysis['targets']]
     check(not error and analysis['freeable_bytes'] > 0 and analysis['nothing_deleted_yet'], f"preset safe analiza sin borrar: {analysis['freeable']}")
@@ -140,6 +152,8 @@ try:
     check(not error and cleaned['freed_bytes'] > 0 and cleaned['deleted'] >= 21, f"limpieza real: {cleaned['freed']} en {cleaned['deleted']} archivos")
     check(not (chrome / 'Cache/Cache_Data').exists() or not any((chrome / 'Cache/Cache_Data').iterdir()), 'la caché de Chrome desapareció')
     check(all((chrome / p).read_bytes() == data for p, data in personal_before.items()), 'cookies, historial, contraseñas y marcadores intactos')
+    check((sandbox / 'Roaming/Claude/Code Cache/protegido').is_file() and not (sandbox / 'Roaming/Claude/Cache/data').exists(),
+          'el servidor respeta las rutas protegidas del usuario (y limpia lo demás)')
     _, error = client.call('clean', {'analysis_id': analysis['analysis_id'], 'confirm': True})
     check(error, 'un análisis solo sirve para una limpieza')
 
@@ -147,6 +161,10 @@ try:
     scan, error = client.call('scan_registry', {'families': ['startup']})
     orphan = [f for f in scan['findings'] if f['value'] == 'Huerfano']
     check(not error and orphan and orphan[0]['can_repair'] and scan['nothing_changed'], 'el análisis del Registro detecta el huérfano sin cambiar nada')
+    refused, error = client.call('repair_registry', {'scan_id': scan['scan_id'], 'all_safe': True, 'confirm': True})
+    check(error and 'Configuración' in refused['error'] and reg_get('HKCU', cv + r'\Run', 'Huerfano') is not None,
+          'sin el permiso del usuario, reparar no cambia nada aunque el agente confirme')
+    settings(AgentsMayChangeRegistry=True)
     _, error = client.call('repair_registry', {'scan_id': scan['scan_id'], 'all_safe': True})
     check(error and reg_get('HKCU', cv + r'\Run', 'Huerfano') is not None, 'reparar sin confirm=true no cambia nada')
     repaired, error = client.call('repair_registry', {'scan_id': scan['scan_id'], 'all_safe': True, 'confirm': True})

@@ -120,6 +120,23 @@ try:
     install('--no-desktop')
     check(not (desk / 'FFCleaner.lnk').exists() and (start / 'FFCleaner.lnk').exists(), 'al actualizar sin escritorio se retira ese acceso')
     check((dest / 'mis-notas.txt').read_text(encoding='utf-8') == 'mío' and exe.is_file(), 'actualizar no borra archivos ajenos a FFCleaner')
+    check([p.name for p in dest.parent.iterdir()] == [dest.name], 'la actualización no deja carpetas de preparación ni versiones apartadas')
+
+    # 4b. Si la carpeta instalada no se puede sustituir (un archivo en uso), la versión instalada sigue intacta.
+    installed = {n: hashlib.sha256((dest / n).read_bytes()).hexdigest() for n in ['FFCleaner.exe', 'FFCleaner.dll', 'install.json']}
+    with open(dest / 'mis-notas.txt', 'rb'):
+        code = install('--no-desktop', expect_ok=False)
+    check(code != 0 and all(hashlib.sha256((dest / n).read_bytes()).hexdigest() == h for n, h in installed.items()) and
+          all((dest / n).is_file() for n in sums), 'una actualización que no puede sustituir la carpeta deja la versión instalada intacta')
+    check([p.name for p in dest.parent.iterdir()] == [dest.name], 'y no deja restos de la versión nueva')
+
+    # 4c. install.json se puede editar: el desinstalador solo borra accesos «FFCleaner.lnk» que abren este FFCleaner.
+    ajeno = sandbox / 'Documentos' / 'tesis.txt'
+    ajeno.parent.mkdir()
+    ajeno.write_text('no tocar', encoding='utf-8')
+    manifest = json.loads((dest / 'install.json').read_text(encoding='utf-8'))
+    manifest['Shortcuts'].append(str(ajeno))
+    (dest / 'install.json').write_text(json.dumps(manifest), encoding='utf-8')
 
     # 5. Desinstalar con el comando silencioso registrado: el .exe se copia a %TEMP%, borra la instalación y se borra solo.
     leftovers = uninstall_quiet()
@@ -127,6 +144,7 @@ try:
     check(not exe.exists() and sorted(p.name for p in dest.iterdir()) == ['mis-notas.txt'], 'quita todos los archivos instalados, incluido el propio desinstalador')
     check((data / 'settings.json').exists(), 'los datos y respaldos del usuario se conservan por defecto')
     check(not leftovers, 'la copia temporal del desinstalador se borra sola')
+    check(ajeno.read_text(encoding='utf-8') == 'no tocar', 'un archivo añadido a install.json como «acceso directo» no se borra')
     (dest / 'mis-notas.txt').unlink()
 
     # 6. Reinstalar y desinstalar borrando también los datos.

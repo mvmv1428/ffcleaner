@@ -8,5 +8,8 @@
   <ItemGroup>
     <Compile Include="../../src/FFCleaner.Desktop/UiPolicy.cs" Link="UiPolicy.cs" />
     <Compile Include="../../src/FFCleaner.Desktop/AppIdentity.cs" Link="AppIdentity.cs" />
+    <Compile Include="../../src/FFCleaner.Desktop/UpdateService.cs" Link="UpdateService.cs" />
+    <Compile Include="../../src/FFCleaner.Desktop/ProcessImage.cs" Link="ProcessImage.cs" />
+    <ProjectReference Include="../../src/FFCleaner.Core/FFCleaner.Core.csproj" />
   </ItemGroup>
 </Project>

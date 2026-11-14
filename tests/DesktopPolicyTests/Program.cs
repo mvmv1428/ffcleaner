@@ -33,6 +33,30 @@ Test("version_anterior_valida_y_argumentos_de_reapertura", () =>
     UiPolicy.RelaunchArguments(["--sandbox", "S", "--sandbox-registry", "R", "--update-feed", "http://127.0.0.1/x", "--updated-from", "0.2.0"])
         .SequenceEqual(["--sandbox", "S", "--sandbox-registry", "R"]));
 
+// Auditoría M1: una actualización que falló no se reintenta en cada arranque (evita el bucle de descargas).
+Test("actualizacion_fallida_no_se_reintenta_en_24_horas", () =>
+{
+    var folder = Path.Combine(Path.GetTempPath(), "ffcleaner-marca-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(folder);
+    try
+    {
+        var marker = Path.Combine(folder, UpdateService.FailedMarkerName);
+        var now = DateTime.UtcNow;
+        var next = new Version(99, 0, 0);
+        void Write(string version, DateTime when) => File.WriteAllText(marker,
+            "{\"version\":\"" + version + "\",\"utc\":\"" + when.ToString("O", System.Globalization.CultureInfo.InvariantCulture) + "\"}");
+        Write("99.0.0", now.AddHours(-1));
+        var recent = UpdateService.RecentlyFailed(folder, next, now) && !UpdateService.RecentlyFailed(folder, new Version(99, 0, 1), now);
+        Write("99.0.0", now.AddHours(-30));
+        var expired = !UpdateService.RecentlyFailed(folder, next, now);
+        Write(UpdateService.Current.ToString(3), now.AddMinutes(-5));
+        var installed = !UpdateService.RecentlyFailed(folder, next, now) && !File.Exists(marker);
+        return recent && expired && installed && !UpdateService.RecentlyFailed(folder, next, now);
+    }
+    finally { Directory.Delete(folder, recursive: true); }
+});
+Test("sin_otras_copias_abiertas_desde_la_carpeta_de_pruebas", () => UpdateService.OtherInstanceRunning() is null);
+
 // Inicio de Windows: nombre real del programa a partir del ejecutable o del acceso directo (solo lectura).
 var cmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
 var cmdDescription = System.Diagnostics.FileVersionInfo.GetVersionInfo(cmd).FileDescription;

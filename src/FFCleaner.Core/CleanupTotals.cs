@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -22,23 +23,44 @@ public sealed class CleanupTotals(string stateDirectory, DiagnosticsLog? log = n
     public string FilePath => Path.Combine(stateDirectory, "totals.json");
     private string JournalDirectory => Path.Combine(stateDirectory, "Journal");
 
+    /// <summary>
+    /// Mutex con nombre para leer-sumar-escribir: la aplicación y el servidor MCP son procesos distintos y, sin él, si
+    /// limpian a la vez uno podría pisar la suma del otro.
+    /// </summary>
+    private string MutexName => @"Local\FFCleaner-totals-" +
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(FilePath).ToUpperInvariant())))[..24];
+
     /// <summary>Lee el acumulado; si aún no existe, lo crea a partir de las bitácoras.</summary>
     public CleanupTotalsData Read()
     {
         lock (Gate)
         {
-            try
-            {
-                if (File.Exists(FilePath)) return JsonSerializer.Deserialize<CleanupTotalsData>(File.ReadAllText(FilePath)) ?? CleanupTotalsData.Empty;
-                var seeded = SeedFromJournals();
-                Write(seeded);
-                return seeded;
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-            {
-                _log.Write("totales", "No se pudo leer el acumulado: " + ex.Message);
-                return CleanupTotalsData.Empty;
-            }
+            using var mutex = new Mutex(false, MutexName);
+            var owned = Acquire(mutex);
+            try { return ReadUnlocked(); }
+            finally { if (owned) mutex.ReleaseMutex(); }
+        }
+    }
+
+    private static bool Acquire(Mutex mutex)
+    {
+        try { return mutex.WaitOne(TimeSpan.FromSeconds(10)); }
+        catch (AbandonedMutexException) { return true; }   // el otro proceso terminó sin soltarlo: el archivo se escribe siempre entero
+    }
+
+    private CleanupTotalsData ReadUnlocked()
+    {
+        try
+        {
+            if (File.Exists(FilePath)) return JsonSerializer.Deserialize<CleanupTotalsData>(File.ReadAllText(FilePath)) ?? CleanupTotalsData.Empty;
+            var seeded = SeedFromJournals();
+            Write(seeded);
+            return seeded;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _log.Write("totales", "No se pudo leer el acumulado: " + ex.Message);
+            return CleanupTotalsData.Empty;
         }
     }
 
@@ -48,17 +70,25 @@ public sealed class CleanupTotals(string stateDirectory, DiagnosticsLog? log = n
     {
         lock (Gate)
         {
-            var current = Read();
-            if (bytes <= 0 && files <= 0) return current;
-            var updated = new CleanupTotalsData(current.Bytes + bytes, current.Files + files, current.Cleanings + 1,
-                current.SinceUtc is { } since && since <= startedUtc ? since : startedUtc);
-            try { Write(updated); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                _log.Write("totales", "No se pudo guardar el acumulado: " + ex.Message);
-            }
-            return updated;
+            using var mutex = new Mutex(false, MutexName);
+            var owned = Acquire(mutex);
+            try { return AddUnlocked(bytes, files, startedUtc); }
+            finally { if (owned) mutex.ReleaseMutex(); }
         }
+    }
+
+    private CleanupTotalsData AddUnlocked(long bytes, long files, DateTime startedUtc)
+    {
+        var current = ReadUnlocked();
+        if (bytes <= 0 && files <= 0) return current;
+        var updated = new CleanupTotalsData(current.Bytes + bytes, current.Files + files, current.Cleanings + 1,
+            current.SinceUtc is { } since && since <= startedUtc ? since : startedUtc);
+        try { Write(updated); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log.Write("totales", "No se pudo guardar el acumulado: " + ex.Message);
+        }
+        return updated;
     }
 
     private CleanupTotalsData SeedFromJournals()

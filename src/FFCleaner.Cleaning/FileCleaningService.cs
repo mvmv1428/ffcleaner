@@ -56,11 +56,20 @@ public sealed class FileCleaningService : IFileCleaningService
         else
         {
             backupRoot ??= BrowserData.NewBackupRoot(_folders.StateDirectory, _clock());
-            var outcome = BrowserData.Clean(target, backupRoot);
-            status = outcome.Status;
-            detail = outcome.Detail;
-            removed = outcome.ItemsRemoved;
-            freed = Math.Max(0, outcome.BytesBefore - outcome.BytesAfter);
+            try
+            {
+                var outcome = BrowserData.Clean(target, backupRoot);
+                status = outcome.Status;
+                detail = outcome.Detail;
+                removed = outcome.ItemsRemoved;
+                freed = Math.Max(0, outcome.BytesBefore - outcome.BytesAfter);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or SqliteException or InvalidOperationException)
+            {
+                // Un fallo imprevisto en un objetivo no corta el lote: se anota y se sigue con los demás.
+                status = CleanStatus.Error;
+                detail = "No se completó (" + ex.Message + ").";
+            }
         }
         var notDeleted = status == CleanStatus.Eliminado ? 0 : (int)Math.Max(1, analysis.DataItems - removed);
         var reasons = status == CleanStatus.Eliminado ? new Dictionary<string, int>() : new Dictionary<string, int> { [status + ": " + detail] = notDeleted };
@@ -72,6 +81,17 @@ public sealed class FileCleaningService : IFileCleaningService
             status is CleanStatus.Error ? notDeleted : 0, status is CleanStatus.NoConfirmado ? notDeleted : 0,
             status is CleanStatus.Cancelado ? notDeleted : 0, 0,
             [new(path, status, detail)], 0) { Reasons = reasons };
+    }
+
+    /// <summary>
+    /// Borra las copias de bases de navegador que ya no hacen falta (las de versiones anteriores se guardaban siempre).
+    /// Se llama al abrir la aplicación y antes de cada limpieza.
+    /// </summary>
+    public int PruneBrowserBackups()
+    {
+        var removed = BrowserData.PruneBackups(_folders.StateDirectory, DateTime.UtcNow);
+        if (removed > 0) _log.Write("limpieza", removed + " copias antiguas de bases de navegador borradas.");
+        return removed;
     }
 
     /// <summary>Carpeta de bitácoras de limpieza.</summary>
@@ -94,6 +114,7 @@ public sealed class FileCleaningService : IFileCleaningService
         if (token.IsCancellationRequested) return Refuse(session, started, "Cancelado antes de empezar.");
         if (!session.TryConsume()) return Refuse(session, started, "Este análisis ya se usó en una limpieza; vuelve a analizar.");
 
+        PruneBrowserBackups();
         // El acumulado se siembra (si hace falta) antes de escribir la bitácora de esta limpieza: así no se cuenta dos veces.
         Totals.Read();
         using var journal = Journal.Open(JournalDirectory, session, started, _log);
@@ -103,123 +124,138 @@ public sealed class FileCleaningService : IFileCleaningService
         string? browserBackupRoot = null;
         long lastReport = 0;
 
-        for (var t = 0; t < session.Targets.Count; t++)
+        // Si algo imprevisto corta el lote, lo ya borrado se anota igualmente en la bitácora y en el total liberado.
+        var completed = false;
+        try
         {
-            var analysis = session.Targets[t];
-            var target = analysis.Target;
-            var counters = new Counters();
-            var details = new List<CleaningItemDetail>();
-            var reasons = new Dictionary<string, int>(StringComparer.Ordinal);
-            var label = target.ProfileName.Length == 0 ? target.AppName + " · " + target.CategoryName
-                : target.AppName + " · " + target.CategoryName + " · " + target.ProfileName;
-
-            void Record(int fileIndex, CleanStatus status, string detail)
+            for (var t = 0; t < session.Targets.Count; t++)
             {
-                switch (status)
+                var analysis = session.Targets[t];
+                var target = analysis.Target;
+                var counters = new Counters();
+                var details = new List<CleaningItemDetail>();
+                var reasons = new Dictionary<string, int>(StringComparer.Ordinal);
+                var label = target.ProfileName.Length == 0 ? target.AppName + " · " + target.CategoryName
+                    : target.AppName + " · " + target.CategoryName + " · " + target.ProfileName;
+
+                void Record(int fileIndex, CleanStatus status, string detail)
                 {
-                    case CleanStatus.Omitido: counters.Skipped++; break;
-                    case CleanStatus.Bloqueado: counters.Locked++; break;
-                    case CleanStatus.Error: counters.Failed++; break;
-                    case CleanStatus.NoConfirmado: counters.Unconfirmed++; break;
-                    case CleanStatus.Cancelado: counters.Cancelled++; break;
+                    switch (status)
+                    {
+                        case CleanStatus.Omitido: counters.Skipped++; break;
+                        case CleanStatus.Bloqueado: counters.Locked++; break;
+                        case CleanStatus.Error: counters.Failed++; break;
+                        case CleanStatus.NoConfirmado: counters.Unconfirmed++; break;
+                        case CleanStatus.Cancelado: counters.Cancelled++; break;
+                    }
+                    // El recuento por motivo no tiene tope: aunque el detalle se recorte, siempre se sabe por qué.
+                    var reason = status + ": " + detail;
+                    reasons[reason] = reasons.GetValueOrDefault(reason) + 1;
+                    if (details.Count < MaxDetailsPerTarget) details.Add(new(analysis.PathOf(fileIndex), status, detail));
+                    else counters.DetailsOmitted++;
                 }
-                // El recuento por motivo no tiene tope: aunque el detalle se recorte, siempre se sabe por qué.
-                var reason = status + ": " + detail;
-                reasons[reason] = reasons.GetValueOrDefault(reason) + 1;
-                if (details.Count < MaxDetailsPerTarget) details.Add(new(analysis.PathOf(fileIndex), status, detail));
-                else counters.DetailsOmitted++;
-            }
 
-            // Revalidación del objetivo: debe seguir seleccionado y sus raíces deben seguir siendo aceptables.
-            var targetRefusal = analysis.Refusal
-                ?? (selection.Contains(target.Key) ? null : "Objetivo no seleccionado.")
-                ?? (selection.Matches(target) ? null : "El objetivo no coincide con el seleccionado.")
-                ?? CleaningGuard.ValidateTarget(target, _folders);
-            journal.TargetStarted(target.Key, analysis.EligibleCount, analysis.EligibleBytes, targetRefusal);
-            if (target.Data is not null)
-            {
-                var dataResult = CleanBrowserData(analysis, targetRefusal, ref browserBackupRoot, token);
-                deletedFiles += dataResult.Deleted;
-                deletedBytes += dataResult.DeletedBytes;
-                results.Add(dataResult);
-                journal.TargetFinished(dataResult);
+                // Revalidación del objetivo: debe seguir seleccionado y sus raíces deben seguir siendo aceptables.
+                var targetRefusal = analysis.Refusal
+                    ?? (selection.Contains(target.Key) ? null : "Objetivo no seleccionado.")
+                    ?? (selection.Matches(target) ? null : "El objetivo no coincide con el seleccionado.")
+                    ?? CleaningGuard.ValidateTarget(target, _folders);
+                journal.TargetStarted(target.Key, analysis.EligibleCount, analysis.EligibleBytes, targetRefusal);
+                if (target.Data is not null)
+                {
+                    var dataResult = CleanBrowserData(analysis, targetRefusal, ref browserBackupRoot, token);
+                    deletedFiles += dataResult.Deleted;
+                    deletedBytes += dataResult.DeletedBytes;
+                    results.Add(dataResult);
+                    journal.TargetFinished(dataResult);
+                    progress?.Report(new(t + 1, session.Targets.Count, processed, totalFiles, deletedBytes, label));
+                    continue;
+                }
+
+                using (var pins = new PinnedDirectoryChain())
+                {
+                    var currentDirectory = -1;
+                    string? directoryProblem = null;
+                    var files = analysis.Files;
+                    for (var i = 0; i < files.Length; i++)
+                    {
+                        ref readonly var file = ref files[i];
+                        if (file.Verdict != FileVerdict.Eligible) { counters.Protected++; continue; }
+                        processed++;
+                        if (token.IsCancellationRequested) { Record(i, CleanStatus.Cancelado, "Cancelado antes de eliminarlo."); continue; }
+                        if (targetRefusal is not null) { Record(i, CleanStatus.Omitido, targetRefusal); continue; }
+
+                        var directory = analysis.DirectoryAt(file.Directory);
+                        var root = target.Roots[directory.RootIndex];
+                        if (file.Directory != currentDirectory)
+                        {
+                            currentDirectory = file.Directory;
+                            directoryProblem = !PathSafety.IsWithin(directory.Path, root.Path)
+                                ? "Carpeta fuera de la raíz autorizada."
+                                : CleaningGuard.IsSensitiveDirectory(directory.Path, target.Anchor, root.Policy)
+                                    ? CleaningGuard.Describe(FileVerdict.SensitiveDirectory)
+                                    : pins.Pin(directory.Path);
+                        }
+                        if (directoryProblem is not null) { Record(i, CleanStatus.Omitido, directoryProblem); continue; }
+
+                        // La política se vuelve a evaluar con los datos del análisis; el handle los confirma después.
+                        var now = _clock();
+                        var verdict = CleaningGuard.CheckFile(root.Policy, file.Name, file.LastWriteUtc, now);
+                        if (verdict != FileVerdict.Eligible) { Record(i, CleanStatus.Omitido, CleaningGuard.Describe(verdict)); continue; }
+
+                        var outcome = NativeDeletion.Delete(Path.Join(directory.Path, file.Name), in file,
+                            analysis.RootVolumes[directory.RootIndex], root.Policy.MinimumAge, now, out var error);
+                        switch (outcome)
+                        {
+                            case DeleteOutcome.Deleted:
+                                counters.Deleted++;
+                                counters.DeletedBytes += file.Length;
+                                deletedFiles++;
+                                deletedBytes += file.Length;
+                                break;
+                            case DeleteOutcome.Locked: Record(i, CleanStatus.Bloqueado, "En uso por otro programa; se omitió."); break;
+                            case DeleteOutcome.AccessDenied: Record(i, CleanStatus.Bloqueado, "Acceso denegado; no se cambiaron permisos."); break;
+                            case DeleteOutcome.Missing: Record(i, CleanStatus.Omitido, "Ya no existe."); break;
+                            case DeleteOutcome.Changed: Record(i, CleanStatus.Omitido, "Cambió desde el análisis; se conserva."); break;
+                            case DeleteOutcome.UnsafeAttributes: Record(i, CleanStatus.Omitido, "Atributos protegidos (solo lectura, sistema, enlace o nube)."); break;
+                            case DeleteOutcome.MultipleLinks: Record(i, CleanStatus.Omitido, CleaningGuard.Describe(FileVerdict.MultipleLinks)); break;
+                            case DeleteOutcome.TooRecent: Record(i, CleanStatus.Omitido, CleaningGuard.Describe(FileVerdict.TooRecent)); break;
+                            case DeleteOutcome.Unconfirmed: Record(i, CleanStatus.NoConfirmado, "Se solicitó el borrado pero el nombre sigue presente (error " + error + ")."); break;
+                            default: Record(i, CleanStatus.Error, "Error de Windows " + error + " antes de modificar el archivo."); break;
+                        }
+
+                        var tick = Environment.TickCount64;
+                        if (progress is not null && tick - lastReport >= ProgressIntervalMs)
+                        {
+                            lastReport = tick;
+                            progress.Report(new(t, session.Targets.Count, processed, totalFiles, deletedBytes, label));
+                        }
+                    }
+                }
+
+                // Con los archivos ya tratados y las carpetas sin fijar, se retiran las subcarpetas que quedaron vacías.
+                var emptyDirectories = targetRefusal is null && !token.IsCancellationRequested
+                    ? RemoveEmptyDirectories(analysis, target, token)
+                    : 0;
+
+                var result = new TargetCleaningResult(target.Key, target.AppName, target.CategoryName, target.ProfileName,
+                    counters.Deleted, counters.DeletedBytes, counters.Skipped, counters.Locked, counters.Failed,
+                    counters.Unconfirmed, counters.Cancelled, counters.Protected, details, counters.DetailsOmitted)
+                { Reasons = reasons, EmptyDirectoriesRemoved = emptyDirectories };
+                results.Add(result);
+                journal.TargetFinished(result);
                 progress?.Report(new(t + 1, session.Targets.Count, processed, totalFiles, deletedBytes, label));
-                continue;
             }
-
-            using (var pins = new PinnedDirectoryChain())
+            completed = true;
+        }
+        finally
+        {
+            if (!completed)
             {
-                var currentDirectory = -1;
-                string? directoryProblem = null;
-                var files = analysis.Files;
-                for (var i = 0; i < files.Length; i++)
-                {
-                    ref readonly var file = ref files[i];
-                    if (file.Verdict != FileVerdict.Eligible) { counters.Protected++; continue; }
-                    processed++;
-                    if (token.IsCancellationRequested) { Record(i, CleanStatus.Cancelado, "Cancelado antes de eliminarlo."); continue; }
-                    if (targetRefusal is not null) { Record(i, CleanStatus.Omitido, targetRefusal); continue; }
-
-                    var directory = analysis.DirectoryAt(file.Directory);
-                    var root = target.Roots[directory.RootIndex];
-                    if (file.Directory != currentDirectory)
-                    {
-                        currentDirectory = file.Directory;
-                        directoryProblem = !PathSafety.IsWithin(directory.Path, root.Path)
-                            ? "Carpeta fuera de la raíz autorizada."
-                            : CleaningGuard.IsSensitiveDirectory(directory.Path, target.Anchor, root.Policy)
-                                ? CleaningGuard.Describe(FileVerdict.SensitiveDirectory)
-                                : pins.Pin(directory.Path);
-                    }
-                    if (directoryProblem is not null) { Record(i, CleanStatus.Omitido, directoryProblem); continue; }
-
-                    // La política se vuelve a evaluar con los datos del análisis; el handle los confirma después.
-                    var now = _clock();
-                    var verdict = CleaningGuard.CheckFile(root.Policy, file.Name, file.LastWriteUtc, now);
-                    if (verdict != FileVerdict.Eligible) { Record(i, CleanStatus.Omitido, CleaningGuard.Describe(verdict)); continue; }
-
-                    var outcome = NativeDeletion.Delete(Path.Join(directory.Path, file.Name), in file,
-                        analysis.RootVolumes[directory.RootIndex], root.Policy.MinimumAge, now, out var error);
-                    switch (outcome)
-                    {
-                        case DeleteOutcome.Deleted:
-                            counters.Deleted++;
-                            counters.DeletedBytes += file.Length;
-                            deletedFiles++;
-                            deletedBytes += file.Length;
-                            break;
-                        case DeleteOutcome.Locked: Record(i, CleanStatus.Bloqueado, "En uso por otro programa; se omitió."); break;
-                        case DeleteOutcome.AccessDenied: Record(i, CleanStatus.Bloqueado, "Acceso denegado; no se cambiaron permisos."); break;
-                        case DeleteOutcome.Missing: Record(i, CleanStatus.Omitido, "Ya no existe."); break;
-                        case DeleteOutcome.Changed: Record(i, CleanStatus.Omitido, "Cambió desde el análisis; se conserva."); break;
-                        case DeleteOutcome.UnsafeAttributes: Record(i, CleanStatus.Omitido, "Atributos protegidos (solo lectura, sistema, enlace o nube)."); break;
-                        case DeleteOutcome.MultipleLinks: Record(i, CleanStatus.Omitido, CleaningGuard.Describe(FileVerdict.MultipleLinks)); break;
-                        case DeleteOutcome.TooRecent: Record(i, CleanStatus.Omitido, CleaningGuard.Describe(FileVerdict.TooRecent)); break;
-                        case DeleteOutcome.Unconfirmed: Record(i, CleanStatus.NoConfirmado, "Se solicitó el borrado pero el nombre sigue presente (error " + error + ")."); break;
-                        default: Record(i, CleanStatus.Error, "Error de Windows " + error + " antes de modificar el archivo."); break;
-                    }
-
-                    var tick = Environment.TickCount64;
-                    if (progress is not null && tick - lastReport >= ProgressIntervalMs)
-                    {
-                        lastReport = tick;
-                        progress.Report(new(t, session.Targets.Count, processed, totalFiles, deletedBytes, label));
-                    }
-                }
+                journal.Interrupted(deletedFiles, deletedBytes);
+                Totals.Add(deletedBytes, deletedFiles, started);
+                _log.Write("limpieza", FormattableString.Invariant($"sesión {session.Id:N} interrumpida por un error: {deletedFiles} eliminados ({deletedBytes} bytes) hasta ese momento"));
             }
-
-            // Con los archivos ya tratados y las carpetas sin fijar, se retiran las subcarpetas que quedaron vacías.
-            var emptyDirectories = targetRefusal is null && !token.IsCancellationRequested
-                ? RemoveEmptyDirectories(analysis, target, token)
-                : 0;
-
-            var result = new TargetCleaningResult(target.Key, target.AppName, target.CategoryName, target.ProfileName,
-                counters.Deleted, counters.DeletedBytes, counters.Skipped, counters.Locked, counters.Failed,
-                counters.Unconfirmed, counters.Cancelled, counters.Protected, details, counters.DetailsOmitted)
-            { Reasons = reasons, EmptyDirectoriesRemoved = emptyDirectories };
-            results.Add(result);
-            journal.TargetFinished(result);
-            progress?.Report(new(t + 1, session.Targets.Count, processed, totalFiles, deletedBytes, label));
         }
 
         var finished = _clock();
@@ -335,6 +371,8 @@ public sealed class FileCleaningService : IFileCleaningService
             noEliminados = report.NotDeleted, carpetasVaciasRetiradas = report.EmptyDirectoriesRemoved, cancelado = report.Cancelled,
             motivos = report.Reasons().Select(p => new { motivo = p.Key, archivos = p.Value }),
         });
+
+        public void Interrupted(int deleted, long bytes) => Line(new { evento = "interrumpido", eliminados = deleted, bytes });
 
         public void Dispose() => _writer?.Dispose();
 

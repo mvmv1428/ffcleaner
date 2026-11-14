@@ -84,10 +84,13 @@
  <sys:String x:Key="S.Settings.ClaudeCode">Claude Code</sys:String>
  <sys:String x:Key="S.Settings.CopyCommand">Copy command</sys:String>
  <sys:String x:Key="S.Settings.CopyJson">Copy JSON config</sys:String>
- <sys:String x:Key="S.Settings.AgentsSafety">For safety, an agent always analyzes before cleaning, can only use normal categories unless personal data is explicitly allowed, and the Registry only repairs «Safe» entries after a verified backup.</sys:String>
+ <sys:String x:Key="S.Settings.AgentsAllow">What else agents may do</sys:String>
+ <sys:String x:Key="S.Settings.AgentsPersonal">Delete browser personal data and AI models</sys:String>
+ <sys:String x:Key="S.Settings.AgentsRegistry">Repair the Registry and restore its backups</sys:String>
+ <sys:String x:Key="S.Settings.AgentsSafety">Without these permissions, an agent can only analyze, free caches and temporary files and turn startup programs on or off. It always analyzes before cleaning, and even with the Registry allowed, only «Safe» entries are repaired after a verified backup.</sys:String>
  <sys:String x:Key="S.Settings.Data">App data</sys:String>
  <sys:String x:Key="S.Settings.Updates">Updates</sys:String>
- <sys:String x:Key="S.Settings.UpdatesHint">FFCleaner looks for new versions on GitHub when it opens. If there is one, it downloads it, checks its SHA-256 fingerprint and updates itself; never during a cleanup or a repair.</sys:String>
+ <sys:String x:Key="S.Settings.UpdatesHint">FFCleaner looks for new versions on GitHub when it opens. If there is one, it downloads it, checks its SHA-256 fingerprint and updates itself before opening its window. If another FFCleaner window is open or an agent is using it, it waits until next time.</sys:String>
  <sys:String x:Key="S.Settings.AutoUpdate">Check for and install updates on startup</sys:String>
  <sys:String x:Key="S.Settings.CheckNow">Check now</sys:String>
  <sys:String x:Key="S.Settings.Repository">Repository</sys:String>

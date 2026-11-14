@@ -34,7 +34,9 @@ Aplicación de escritorio en C# WPF / .NET 10, sin servicios residentes, sin tel
 
 - Nunca borra nada sin analizar antes y sin tu confirmación. Cambiar una casilla invalida el análisis anterior.
 - Nunca toca contraseñas, marcadores, tarjetas ni direcciones guardadas.
-- Los datos personales del navegador y los modelos de IA solo se borran si los marcas uno a uno. Exigen el navegador cerrado, y antes se guarda una copia de cada base de datos.
+- Los datos personales del navegador y los modelos de IA solo se borran si los marcas uno a uno. Exigen el navegador cerrado.
+  - Antes de tocar una base se guarda una copia temporal. Si todo sale bien, la copia también se borra, para que lo borrado no quede guardado en FFCleaner.
+  - Solo se conserva si no se pudo comprobar que la base quedó bien, junto a un aviso `CONSERVAR.txt`.
 - No sigue enlaces ni accesos directos. Conserva los archivos en uso, de solo lectura, compartidos por enlaces físicos o que cambiaron desde el análisis.
 - En el Registro solo repara lo clasificado como «Seguro», siempre con un respaldo verificado antes; restaurar nunca sobrescribe datos que cambiaron.
 - No promete que limpiar el Registro acelere el equipo.
@@ -55,6 +57,11 @@ Ninguno de los dos necesita .NET instalado, porque incluyen su propio runtime. E
 - Si hay una versión nueva, aparece una ventana «Actualizando FFCleaner» con el progreso: descarga, comprobación de huellas SHA-256 e instalación. Luego se abre la versión nueva, que muestra «FFCleaner se actualizó a la versión X».
 - Como todo ocurre antes de abrir la aplicación, nunca coincide con un análisis, una limpieza o una reparación.
 - Mientras FFCleaner está abierto no se reinicia nunca: «Buscar ahora» (en Configuración) solo avisa y la instalación queda para la próxima vez que lo abras.
+- No se actualiza en estos casos, y queda para la próxima vez:
+  - si hay otra ventana de FFCleaner abierta;
+  - si un agente está usando su servidor MCP;
+  - si se abrió como administrador.
+- La versión nueva se copia y se comprueba aparte y luego sustituye a la instalada. Si algo falla, la instalada sigue intacta y esa versión no se reintenta hasta pasadas 24 horas.
 - Se puede desactivar en Configuración. Si no hay conexión, la comprobación se abandona a los pocos segundos y FFCleaner se abre normalmente.
 - La única conexión es con la API de GitHub; no se envía ningún dato tuyo.
 
@@ -78,6 +85,8 @@ Reglas que aplica el propio servidor:
 - **Limpiar**: `clean` exige el `analysis_id` de un análisis previo (un solo uso, caduca a los 15 minutos) y `confirm=true`.
 - **Datos personales y modelos**: requieren `allow_personal_data` y `allow_models`, respectivamente.
 - **Registro**: solo se reparan hallazgos «Seguro», con respaldo previo.
+- **Permiso del usuario**: los parámetros anteriores los pone el propio agente. Por eso, borrar datos personales o modelos y reparar o restaurar el Registro exigen además que actives ese permiso en Configuración > Agentes de IA. Viene desactivado.
+- **Rutas protegidas**: el servidor respeta las exclusiones guardadas en los ajustes, igual que la aplicación.
 
 ## Compilar y probar
 
@@ -121,7 +130,7 @@ Están en `%LOCALAPPDATA%\FFCleaner`:
 - `totals.json`: total liberado.
 - `Journal\`: bitácoras de limpieza.
 - `RegistryBackups\`: respaldos del Registro.
-- `BrowserBackups\`: copias de las bases del navegador.
+- `BrowserBackups\`: copias temporales de las bases del navegador (solo quedan si una restauración no se pudo comprobar).
 - `Logs\ffcleaner.log`: registro de diagnóstico.
 
 ## Límites conocidos
