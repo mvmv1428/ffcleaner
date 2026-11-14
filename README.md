@@ -5,6 +5,12 @@
 
 Aplicación de escritorio en C# WPF / .NET 10, sin servicios residentes, sin telemetría y sin dependencias externas.
 
+![Limpieza personalizada: cuánto se puede liberar, en total y por aplicación](screenshots/limpieza.png)
+
+![Inicio de Windows: programas que arrancan con Windows, con su nombre e icono reales](screenshots/inicio.png)
+
+<sub>Capturas con datos de demostración, generadas con `python tools/readme_screenshots.py`.</sub>
+
 ## Funciones
 
 - **Limpieza personalizada**:

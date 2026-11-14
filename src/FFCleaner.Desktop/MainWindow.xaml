@@ -333,12 +333,12 @@
             <Border DockPanel.Dock="Left" Width="26" Height="26" CornerRadius="8" Background="{DynamicResource AccentGradient}" Margin="0,0,10,0"><TextBlock Text="{Binding Initial}" Foreground="White" FontWeight="Bold" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
             <StackPanel>
              <TextBlock Text="{Binding Category}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Category}"/>
-             <TextBlock Foreground="{DynamicResource InkMuted}" FontSize="11" TextTrimming="CharacterEllipsis"><Run Text="{Binding App, Mode=OneWay}"/><Run Text="  "/><Run Text="{Binding Profile, Mode=OneWay}"/></TextBlock>
+             <TextBlock Foreground="{DynamicResource InkMuted}" FontSize="11" TextTrimming="CharacterEllipsis"><Run Text="{Binding Subtitle, Mode=OneWay}"/></TextBlock>
             </StackPanel>
            </DockPanel>
           </DataTemplate></DataGridTemplateColumn.CellTemplate>
          </DataGridTemplateColumn>
-         <DataGridTemplateColumn Width="122">
+         <DataGridTemplateColumn Width="126">
           <DataGridTemplateColumn.Header><TextBlock Text="{DynamicResource S.Col.Size}"/></DataGridTemplateColumn.Header>
           <DataGridTemplateColumn.CellTemplate><DataTemplate>
            <StackPanel VerticalAlignment="Center">
@@ -350,9 +350,6 @@
            </StackPanel>
           </DataTemplate></DataGridTemplateColumn.CellTemplate>
          </DataGridTemplateColumn>
-         <DataGridTextColumn Binding="{Binding Files}" Width="132" ElementStyle="{StaticResource MutedCell}">
-          <DataGridTextColumn.Header><TextBlock Text="{DynamicResource S.Col.Items}"/></DataGridTextColumn.Header>
-         </DataGridTextColumn>
          <DataGridTemplateColumn Width="*" MinWidth="140">
           <DataGridTemplateColumn.Header><TextBlock Text="{DynamicResource S.Col.State}"/></DataGridTemplateColumn.Header>
           <DataGridTemplateColumn.CellTemplate><DataTemplate>

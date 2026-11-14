@@ -59,6 +59,9 @@ public sealed record ResultRowVm(string App, string Category, string Profile, st
 
     /// <summary>Inicial de la aplicación para su insignia de color.</summary>
     public string Initial => App.Length == 0 ? "?" : App[..1].ToUpperInvariant();
+
+    /// <summary>«Brave · Default · 80 elementos»: aplicación, perfil y cuántos elementos (sustituye a la columna aparte).</summary>
+    public string Subtitle => string.Join(" · ", new[] { App, Profile, Files + Loc.T(" elementos", " items") }.Where(p => p.Length > 0));
 }
 
 /// <summary>Una barra del desglose por aplicación del espacio que se puede liberar.</summary>
