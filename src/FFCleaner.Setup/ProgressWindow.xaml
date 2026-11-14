@@ -1,0 +1,24 @@
+<Window x:Class="FFCleaner.Setup.ProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Actualizando FFCleaner" Width="460" SizeToContent="Height" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Icon="pack://application:,,,/Assets/ffcleaner.png" Background="{StaticResource Canvas}" FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="13"
+        UseLayoutRounding="True" SnapsToDevicePixels="True" TextOptions.TextFormattingMode="Display" AutomationProperties.AutomationId="SetupProgressWindow">
+ <!-- Ventana de la actualización automática: instala la versión nueva y vuelve a abrir FFCleaner. -->
+ <StackPanel>
+  <Border Padding="24,18">
+   <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color="#141537" Offset="0"/><GradientStop Color="#0B1426" Offset="1"/></LinearGradientBrush></Border.Background>
+   <DockPanel>
+    <Image DockPanel.Dock="Left" Source="pack://application:,,,/Assets/ffcleaner.png" Width="44" Height="44" Margin="0,0,14,0" RenderOptions.BitmapScalingMode="HighQuality"/>
+    <StackPanel VerticalAlignment="Center">
+     <TextBlock Text="Actualizando FFCleaner" Foreground="White" FontSize="18" FontWeight="Bold"/>
+     <TextBlock x:Name="VersionText" Foreground="#A3ABCC" Margin="0,2,0,0"/>
+    </StackPanel>
+   </DockPanel>
+  </Border>
+  <StackPanel Margin="24,18,24,20">
+   <ProgressBar x:Name="Bar" Minimum="0" Maximum="100"/>
+   <TextBlock x:Name="StatusText" AutomationProperties.AutomationId="SetupProgressText" Foreground="{StaticResource InkSoft}" TextWrapping="Wrap" Margin="0,10,0,0" Text="Preparando la instalación…"/>
+  </StackPanel>
+ </StackPanel>
+</Window>

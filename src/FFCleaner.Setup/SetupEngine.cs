@@ -29,6 +29,8 @@ public sealed record SetupOptions
     public bool Update { get; init; }
     /// <summary>Proceso de FFCleaner que hay que esperar a que se cierre antes de sustituir sus archivos.</summary>
     public int? WaitPid { get; init; }
+    /// <summary>En modo silencioso, muestra una ventana de progreso (actualización automática).</summary>
+    public bool ShowProgress { get; init; }
     /// <summary>Argumentos con los que se vuelve a abrir FFCleaner al terminar.</summary>
     public string? LaunchArguments { get; init; }
 
@@ -64,6 +66,7 @@ public sealed record SetupOptions
                 "--no-launch" => o with { Launch = false },
                 "--relocated" => o with { Relocated = true },
                 "--update" => o with { Update = true },
+                "--show-progress" => o with { ShowProgress = true },
                 "--wait-pid" => o with { WaitPid = int.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture) },
                 "--launch-args" => o with { LaunchArguments = Next() },
                 "--dest" => o with { Destination = Path.GetFullPath(Next()) },

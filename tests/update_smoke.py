@@ -128,7 +128,12 @@ try:
     publish(digest)
     leftovers_before = {p.name for p in Path(tempfile.gettempdir()).glob('ffcleaner-update-*')}
     second = subprocess.Popen([str(dest / 'FFCleaner.exe'), *args])
-    check(wait_for(lambda: second.poll() is not None, 180), 'la app se cierra sola para actualizarse')
+    seen = ps(
+        "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $AE=[System.Windows.Automation.AutomationElement]; $S=[System.Windows.Automation.TreeScope];"
+        "$end=(Get-Date).AddSeconds(90); do { $w=$AE::RootElement.FindFirst($S::Children,(New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty,'Actualizando FFCleaner')));"
+        "if($w){ 'VISTA'; break }; Start-Sleep -Milliseconds 100 } while((Get-Date) -lt $end)")
+    check('VISTA' in seen, 'se muestra la ventana «Actualizando FFCleaner» antes de abrir la app')
+    check(wait_for(lambda: second.poll() is not None, 180), 'el proceso inicial termina sin abrir la ventana principal y deja paso al instalador')
     reopened = wait_for(lambda: app_pids(), 180)
     check(bool(reopened) and (dest / 'LEEME.txt').is_file(), 'el instalador sustituyó la instalación y volvió a abrir FFCleaner')
     title = toast_text(next(iter(reopened)))

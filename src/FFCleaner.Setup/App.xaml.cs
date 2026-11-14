@@ -10,7 +10,7 @@ namespace FFCleaner.Setup;
 /// </summary>
 public partial class App : Application
 {
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         SetupOptions options;
@@ -28,7 +28,10 @@ public partial class App : Application
 
         if (options.Quiet)
         {
-            var progress = new Progress<(double, string)>(_ => { });
+            // En la actualización automática se ve una ventanita de progreso; en el modo silencioso puro, nada.
+            var window = options.ShowProgress && !options.Uninstall ? new ProgressWindow() : null;
+            window?.Show();
+            IProgress<(double Percent, string Text)> progress = window is null ? new SyncProgress() : new Progress<(double Percent, string Text)>(window.Report);
             try
             {
                 if (options.Uninstall)
@@ -38,9 +41,12 @@ public partial class App : Application
                 }
                 else
                 {
-                    WaitFor(options.WaitPid);
+                    progress.Report((1, "Esperando a que se cierre FFCleaner…"));
+                    await Task.Run(() => WaitFor(options.WaitPid));
                     var effective = options.WithPreviousChoices();
-                    var exe = SetupEngine.Install(self, effective, new SyncProgress());
+                    var exe = await Task.Run(() => SetupEngine.Install(self, effective, progress));
+                    window?.Report((100, "Listo. Abriendo FFCleaner…"));
+                    if (window is not null) await Task.Delay(700);
                     // Se abre desde su propia carpeta: si heredara la del instalador (temporal), esa no se podría borrar luego.
                     if (options.Launch) Process.Start(new ProcessStartInfo(exe, options.LaunchArguments ?? "") { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(exe)! });
                 }
@@ -48,6 +54,11 @@ public partial class App : Application
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.SecurityException or System.Text.Json.JsonException)
             {
+                if (window is not null)
+                {
+                    window.ShowError(ex.Message);
+                    await Task.Delay(4000);
+                }
                 // Si una actualización automática falla, se vuelve a abrir la versión que hubiera para no dejar al usuario sin nada.
                 var existing = Path.Combine(options.Destination, "FFCleaner.exe");
                 if (options.Update && options.Launch && File.Exists(existing))

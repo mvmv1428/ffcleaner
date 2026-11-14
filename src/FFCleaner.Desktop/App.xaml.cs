@@ -11,9 +11,11 @@ public partial class App : Application
 {
     private DiagnosticsLog _log = DiagnosticsLog.Null;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Hasta que exista la ventana principal, cerrar la ventanita de actualización no debe cerrar la aplicación.
+        ShutdownMode = ShutdownMode.OnExplicitShutdown;
         DispatcherUnhandledException += (_, a) =>
         {
             _log.Write("error", a.Exception.ToString());
@@ -63,6 +65,15 @@ public partial class App : Application
                 Dispatcher.BeginInvoke(() => ThemeManager.Apply("system"));
         };
 
+        // Actualizaciones: del repositorio configurado al compilar; en sandbox, solo con una fuente de prueba local.
+        // Se buscan ANTES de abrir la ventana principal: si hay versión nueva, se instala y FFCleaner se reabre ya actualizado.
+        var updater = new UpdateService(_log, folders.IsSandbox ? null : UpdateService.ConfiguredRepository(), launch.UpdateFeed);
+        if (settings.AutoUpdate && await UpdateWindow.TryUpdateAsync(updater, UiPolicy.RelaunchArguments(e.Args), _log))
+        {
+            Shutdown(0);
+            return;
+        }
+
         IAnalysisService analysis = new FileAnalysisService(folders, settings.Exclusions, log: _log);
         IFileCleaningService cleaning = new FileCleaningService(folders, _log, processes: new SystemProcessProbe());
         var catalog = analysis.Discover();
@@ -87,14 +98,13 @@ public partial class App : Application
         var startup = new StartupManager(scope, userStartup, commonStartup, trace: message => _log.Write("inicio", message));
         var registryVm = new RegistryViewModel(scanner, repair, backups, holder, folders.IsSandbox);
         var startupVm = new StartupViewModel(startup, registryVm.ElevateCommand, registryVm.CanElevate, folders.IsSandbox);
-        // Actualizaciones: del repositorio configurado al compilar; en sandbox, solo con una fuente de prueba local.
-        var updater = new UpdateService(_log, folders.IsSandbox ? null : UpdateService.ConfiguredRepository(), launch.UpdateFeed);
-        var updates = new UpdateCoordinator(updater, holder, () => cleanupVm.IsBusy || registryVm.IsBusy, UiPolicy.RelaunchArguments(e.Args), _log);
+        var updates = new UpdateCoordinator(updater, holder, _log);
         var settingsVm = new SettingsViewModel(holder, folders.StateDirectory, Path.Combine(AppContext.BaseDirectory, "FFCleaner.Mcp.exe"), updates);
         string Mode() => folders.IsSandbox ? Loc.T("MODO SANDBOX · datos de prueba", "SANDBOX MODE · test data")
             : RegistryScope.IsElevated ? Loc.T("ADMINISTRADOR", "ADMINISTRATOR") : Loc.T("USUARIO ESTÁNDAR", "STANDARD USER");
         MainWindow = new MainWindow(cleanupVm, registryVm, startupVm, settingsVm, Mode, updates, launch.UpdatedFrom);
         MainWindow.Closed += (_, _) => workflow.Dispose();
+        ShutdownMode = ShutdownMode.OnMainWindowClose;
         MainWindow.Show();
     }
 }

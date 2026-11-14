@@ -157,7 +157,7 @@ public sealed class UpdateService
     public void LaunchInstaller(string setup, IEnumerable<string> relaunchArguments)
     {
         var start = new ProcessStartInfo(setup) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(setup)! };
-        foreach (var arg in new[] { "--update", "--quiet", "--dest", InstallDirectory, "--wait-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        foreach (var arg in new[] { "--update", "--quiet", "--show-progress", "--dest", InstallDirectory, "--wait-pid", Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                                     "--launch-args", string.Join(' ', relaunchArguments.Select(Quote)) })
             start.ArgumentList.Add(arg);
         Process.Start(start);

@@ -18,7 +18,12 @@ while ((Get-Date) -lt $until) {
 if (!$script:root) { throw 'La ventana de FFCleaner no apareció' }
 
 function Find([string]$id) { $script:root.FindFirst($Scope::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, $id))) }
-function Element([string]$id) { $x = Find $id; if (!$x) { throw "Falta el control: $id" }; return $x }
+function Element([string]$id) {
+    # El árbol de UI Automation puede no estar disponible un instante mientras la ventana se redistribuye: se reintenta.
+    $end = (Get-Date).AddSeconds(10); $tries = 0
+    do { $x = Find $id; if ($x) { if ($tries -gt 0) { Write-Output "NOTA $id apareció tras $tries reintentos" | Out-Host }; return $x }; $tries++; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $end)
+    throw "Falta el control: $id"
+}
 function Invoke([string]$id) {
     $end = (Get-Date).AddSeconds(15)
     do { $x = Element $id; if ($x.Current.IsEnabled) { break }; Start-Sleep -Milliseconds 100 } while ((Get-Date) -lt $end)

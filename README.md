@@ -45,10 +45,11 @@ Ninguno de los dos necesita .NET instalado, porque incluyen su propio runtime. E
 
 **Actualizaciones**:
 
-- La copia instalada busca versiones nuevas en las releases de este repositorio al abrirse y se actualiza sola.
-- Antes de instalar, comprueba la huella SHA-256 que publica GitHub y la de cada archivo del paquete.
-- Nunca interrumpe una limpieza en curso. Al terminar muestra «FFCleaner se actualizó a la versión X».
-- Se puede desactivar en Configuración.
+- Al abrirse, la copia instalada busca versiones nuevas en las releases de este repositorio, **antes de mostrar su ventana**.
+- Si hay una versión nueva, aparece una ventana «Actualizando FFCleaner» con el progreso: descarga, comprobación de huellas SHA-256 e instalación. Luego se abre la versión nueva, que muestra «FFCleaner se actualizó a la versión X».
+- Como todo ocurre antes de abrir la aplicación, nunca coincide con un análisis, una limpieza o una reparación.
+- Mientras FFCleaner está abierto no se reinicia nunca: «Buscar ahora» (en Configuración) solo avisa y la instalación queda para la próxima vez que lo abras.
+- Se puede desactivar en Configuración. Si no hay conexión, la comprobación se abandona a los pocos segundos y FFCleaner se abre normalmente.
 - La única conexión es con la API de GitHub; no se envía ningún dato tuyo.
 
 ## Agentes de IA (MCP)
