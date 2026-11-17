@@ -56,7 +56,7 @@ public sealed class UpdateCoordinator(UpdateService service, SettingsHolder sett
             Noticed?.Invoke(this, new(Loc.T("Versión nueva disponible", "New version available"), Status, NoticeKind.Info));
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException
-                                   or System.Text.Json.JsonException or KeyNotFoundException)
+                                   or System.Text.Json.JsonException or KeyNotFoundException or ArgumentException or FormatException)
         {
             log.Write("actualizacion", "no se pudo comprobar: " + ex.Message);
             Status = Loc.T("No se pudo comprobar si hay actualizaciones: ", "Could not check for updates: ") + ex.Message;
@@ -65,14 +65,20 @@ public sealed class UpdateCoordinator(UpdateService service, SettingsHolder sett
         finally { IsWorking = false; }
     }
 
-    /// <summary>Borra las descargas de actualizaciones anteriores que quedaron en %TEMP%.</summary>
+    /// <summary>
+    /// Borra las descargas de actualizaciones anteriores que quedaron en la carpeta temporal del actualizador: el %TEMP%
+    /// real, o el Temp del sandbox en las pruebas (así una prueba nunca toca una descarga real en curso).
+    /// </summary>
     private async Task RemoveLeftovers()
     {
         // Justo después de actualizar, el instalador que nos abrió aún se está cerrando: se reintenta unos segundos.
         for (var attempt = 0; attempt < 10; attempt++)
         {
             var pending = false;
-            foreach (var dir in new System.IO.DirectoryInfo(System.IO.Path.GetTempPath()).EnumerateDirectories("ffcleaner-update-*"))
+            System.IO.DirectoryInfo[] leftovers;
+            try { leftovers = new System.IO.DirectoryInfo(service.WorkRoot).GetDirectories("ffcleaner-update-*"); }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { return; }
+            foreach (var dir in leftovers)
             {
                 try { dir.Delete(recursive: true); log.Write("actualizacion", "descarga anterior retirada: " + dir.Name); }
                 catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException) { pending = true; }

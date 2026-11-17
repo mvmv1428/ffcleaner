@@ -41,7 +41,8 @@ public partial class UpdateWindow : Window
             using var quick = new CancellationTokenSource(TimeSpan.FromSeconds(4));
             update = await service.CheckAsync(quick.Token);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException or KeyNotFoundException)
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.Text.Json.JsonException or KeyNotFoundException
+                                   or ArgumentException or FormatException)
         {
             log.Write("actualizacion", "comprobación al abrir sin resultado: " + ex.Message);
             return false;
@@ -83,7 +84,8 @@ public partial class UpdateWindow : Window
             return false;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or System.IO.IOException
-                                   or UnauthorizedAccessException or System.Text.Json.JsonException or System.IO.InvalidDataException or System.ComponentModel.Win32Exception)
+                                   or UnauthorizedAccessException or System.Text.Json.JsonException or System.IO.InvalidDataException or System.ComponentModel.Win32Exception
+                                   or ArgumentException or FormatException or KeyNotFoundException)
         {
             log.Write("actualizacion", "no se actualizó: " + ex.Message);
             window.Bar.IsIndeterminate = false;

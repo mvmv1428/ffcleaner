@@ -130,7 +130,7 @@ try:
         return log.read_text(encoding='utf-8', errors='replace') if log.exists() else ''
 
     def updates_in_temp():
-        return {p.name for p in Path(tempfile.gettempdir()).glob('ffcleaner-update-*')}
+        return {p.name for p in (sandbox / 'Temp').glob('ffcleaner-update-*')}
 
     # 1b. Con otra ventana abierta no se descarga nada (antes, el instalador fallaba y reabría FFCleaner en bucle).
     publish(digest, tag='v0.0.1')
@@ -158,7 +158,7 @@ try:
 
     # 2. Huella correcta: se cierra, se actualiza y se vuelve a abrir con el aviso.
     publish(digest)
-    leftovers_before = {p.name for p in Path(tempfile.gettempdir()).glob('ffcleaner-update-*')}
+    leftovers_before = {p.name for p in (sandbox / 'Temp').glob('ffcleaner-update-*')}
     second = subprocess.Popen([str(dest / 'FFCleaner.exe'), *args])
     seen = ps(
         "Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes; $AE=[System.Windows.Automation.AutomationElement]; $S=[System.Windows.Automation.TreeScope];"
@@ -172,7 +172,7 @@ try:
     check('se actualiz' in title, f'la versión reabierta muestra el aviso: «{title}»')
     text = log.read_text(encoding='utf-8', errors='replace')
     check('descargada y verificada' in text and 'instalador lanzado' in text, 'el registro de diagnóstico documenta la descarga verificada')
-    left = wait_for(lambda: not ({p.name for p in Path(tempfile.gettempdir()).glob('ffcleaner-update-*')} - leftovers_before), 60)
+    left = wait_for(lambda: not ({p.name for p in (sandbox / 'Temp').glob('ffcleaner-update-*')} - leftovers_before), 60)
     check(left, 'la descarga temporal se retira al reabrir')
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_root + r'\FFCleaner') as k:
         check(winreg.QueryValueEx(k, 'InstallLocation')[0].lower() == str(dest).lower(), 'sigue registrada en la misma carpeta (con sus elecciones)')

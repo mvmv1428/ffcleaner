@@ -26,9 +26,11 @@ public sealed class UpdateService
     private readonly Uri? _feed;
     private readonly string? _assetPrefix;
 
-    public UpdateService(DiagnosticsLog log, string? repository, Uri? testFeed = null, HttpMessageHandler? handler = null)
+    /// <param name="workRoot">Carpeta temporal donde se descarga y descomprime la versión nueva (en sandbox, la del sandbox).</param>
+    public UpdateService(DiagnosticsLog log, string? repository, Uri? testFeed = null, HttpMessageHandler? handler = null, string? workRoot = null)
     {
         _log = log;
+        WorkRoot = workRoot ?? Path.GetTempPath();
         Repository = string.IsNullOrWhiteSpace(repository) ? null : repository.Trim();
         if (testFeed is not null) _feed = testFeed;
         else if (Repository is not null) _feed = new Uri($"https://api.github.com/repos/{Repository}/releases/latest");
@@ -39,6 +41,9 @@ public sealed class UpdateService
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("FFCleaner-Updater/" + Current.ToString(3));
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
     }
+
+    /// <summary>Carpeta temporal de las descargas (`ffcleaner-update-*`): el %TEMP% real o el Temp del sandbox.</summary>
+    public string WorkRoot { get; }
 
     /// <summary>Repositorio configurado en la compilación («usuario/nombre»), o null.</summary>
     public string? Repository { get; }
@@ -65,7 +70,10 @@ public sealed class UpdateService
         if (root.TryGetProperty("draft", out var draft) && draft.GetBoolean()) return null;
         if (root.TryGetProperty("prerelease", out var pre) && pre.GetBoolean()) return null;
         var tag = root.GetProperty("tag_name").GetString() ?? "";
-        if (!Version.TryParse(tag.TrimStart('v', 'V'), out var version) || Normalize(version) <= Normalize(Current)) return null;
+        if (!Version.TryParse(tag.TrimStart('v', 'V'), out var parsed)) return null;
+        // Siempre en tres partes: una etiqueta «v1.0» es la 1.0.0 (antes, ToString(3) lanzaba y FFCleaner no llegaba a abrirse).
+        var version = Normalize(parsed);
+        if (version <= Normalize(Current)) return null;
         var expected = $"FFCleaner-{version.ToString(3)}-win-x64.zip";
         JsonElement? asset = null;
         string? checksumUrl = null;
@@ -76,12 +84,12 @@ public sealed class UpdateService
             if (string.Equals(name, expected + ".sha256", StringComparison.OrdinalIgnoreCase)) checksumUrl = a.GetProperty("browser_download_url").GetString();
         }
         if (asset is not { } found) throw new InvalidOperationException($"La versión {tag} no incluye {expected}.");
-        var url = new Uri(found.GetProperty("browser_download_url").GetString()!);
+        var url = AbsoluteUrl(found.GetProperty("browser_download_url").GetString());
         CheckOrigin(url);
         var sha = found.TryGetProperty("digest", out var digest) && digest.GetString() is { } d && d.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) ? d[7..] : null;
         if (sha is null && checksumUrl is not null)
         {
-            var checksum = new Uri(checksumUrl);
+            var checksum = AbsoluteUrl(checksumUrl);
             CheckOrigin(checksum);
             sha = (await _http.GetStringAsync(checksum, token)).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         }
@@ -96,7 +104,7 @@ public sealed class UpdateService
     /// </summary>
     public async Task<string> PrepareAsync(UpdateInfo update, IProgress<double>? progress = null, CancellationToken token = default)
     {
-        var work = Path.Combine(Path.GetTempPath(), "ffcleaner-update-" + update.Version.ToString(3) + "-" + Guid.NewGuid().ToString("N")[..8]);
+        var work = Path.Combine(WorkRoot, "ffcleaner-update-" + update.Version.ToString(3) + "-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(work);
         try
         {
@@ -215,6 +223,10 @@ public sealed class UpdateService
                 }
         return null;
     }
+
+    /// <summary>Una dirección de descarga mal formada es un problema de la versión publicada, no un error que cierre FFCleaner.</summary>
+    private static Uri AbsoluteUrl(string? text) =>
+        Uri.TryCreate(text, UriKind.Absolute, out var url) ? url : throw new InvalidOperationException("La versión publicada tiene una dirección de descarga no válida.");
 
     private void CheckOrigin(Uri url)
     {

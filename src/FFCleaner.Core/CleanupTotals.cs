@@ -48,18 +48,36 @@ public sealed class CleanupTotals(string stateDirectory, DiagnosticsLog? log = n
         catch (AbandonedMutexException) { return true; }   // el otro proceso terminó sin soltarlo: el archivo se escribe siempre entero
     }
 
-    private CleanupTotalsData ReadUnlocked()
+    private CleanupTotalsData ReadUnlocked() => ReadUnlocked(out _);
+
+    /// <param name="reliable">
+    /// false si el archivo existe pero no se pudo leer (en uso, sin permisos): quien suma no debe sobrescribirlo, porque
+    /// perdería el acumulado. Un archivo dañado (JSON no válido) se aparta como «totals.json.danado-…» y el acumulado se
+    /// rehace desde las bitácoras que queden.
+    /// </param>
+    private CleanupTotalsData ReadUnlocked(out bool reliable)
     {
+        reliable = true;
         try
         {
-            if (File.Exists(FilePath)) return JsonSerializer.Deserialize<CleanupTotalsData>(File.ReadAllText(FilePath)) ?? CleanupTotalsData.Empty;
+            if (File.Exists(FilePath))
+            {
+                try { return JsonSerializer.Deserialize<CleanupTotalsData>(File.ReadAllText(FilePath)) ?? throw new JsonException("vacío"); }
+                catch (JsonException ex)
+                {
+                    var aside = FilePath + ".danado-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss", System.Globalization.CultureInfo.InvariantCulture);
+                    File.Move(FilePath, aside, overwrite: true);
+                    _log.Write("totales", "Acumulado dañado (" + ex.Message + "); se apartó como " + Path.GetFileName(aside) + " y se rehace desde las bitácoras.");
+                }
+            }
             var seeded = SeedFromJournals();
             Write(seeded);
             return seeded;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _log.Write("totales", "No se pudo leer el acumulado: " + ex.Message);
+            reliable = !File.Exists(FilePath);
             return CleanupTotalsData.Empty;
         }
     }
@@ -79,8 +97,14 @@ public sealed class CleanupTotals(string stateDirectory, DiagnosticsLog? log = n
 
     private CleanupTotalsData AddUnlocked(long bytes, long files, DateTime startedUtc)
     {
-        var current = ReadUnlocked();
+        var current = ReadUnlocked(out var reliable);
         if (bytes <= 0 && files <= 0) return current;
+        if (!reliable)
+        {
+            // Escribir ahora sustituiría el acumulado que no se pudo leer por esta sola limpieza.
+            _log.Write("totales", FormattableString.Invariant($"Acumulado ilegible: no se sumaron {bytes} bytes para no perder el total guardado."));
+            return current;
+        }
         var updated = new CleanupTotalsData(current.Bytes + bytes, current.Files + files, current.Cleanings + 1,
             current.SinceUtc is { } since && since <= startedUtc ? since : startedUtc);
         try { Write(updated); }

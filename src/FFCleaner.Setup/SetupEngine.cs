@@ -69,7 +69,8 @@ public sealed record SetupOptions
                 "--relocated" => o with { Relocated = true },
                 "--update" => o with { Update = true },
                 "--show-progress" => o with { ShowProgress = true },
-                "--wait-pid" => o with { WaitPid = int.Parse(Next(), System.Globalization.CultureInfo.InvariantCulture) },
+                "--wait-pid" => o with { WaitPid = int.TryParse(Next(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var pid)
+                    ? pid : throw new ArgumentException("Valor no válido en --wait-pid.") },
                 "--launch-args" => o with { LaunchArguments = Next() },
                 "--target-version" => o with { TargetVersion = System.Version.TryParse(Next(), out var target) && target.Build >= 0 ? target.ToString(3) : throw new ArgumentException("Versión no válida en --target-version") },
                 "--dest" => o with { Destination = Path.GetFullPath(Next()) },
@@ -405,7 +406,8 @@ public static class SetupEngine
         var key = (manifest.RegistryKey ?? string.Empty).Trim('\\');
         if (!key.Equals(KeyName, StringComparison.OrdinalIgnoreCase) &&
             !key.EndsWith("\\" + KeyName, StringComparison.OrdinalIgnoreCase) &&
-            !key.StartsWith(SetupOptions.SandboxRegistryPrefix.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+            // Con su separador final: una clave hermana como «CleanerApp_TestSandboxX» no es del sandbox.
+            !key.StartsWith(SetupOptions.SandboxRegistryPrefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("install.json apunta a una clave del Registro ajena a FFCleaner: " + manifest.RegistryKey);
         if (!removeData) return;
         var data = manifest.DataDirectory;

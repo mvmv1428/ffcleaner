@@ -4,6 +4,24 @@ internal static class RegressionTests
 {
  public static void Register()
  {
+  TestRegistry.Add("Una entrada ilegible se anota y no interrumpe la familia", () =>
+  {
+   var context=new DetectorContext(RegistryScope.Sandbox("entrada-ilegible"), new FileSystemTargetProbe(), RegistryFamily.Startup, CancellationToken.None);
+   var examined=new List<string>();
+   foreach (var name in new[]{"a","b","c"})
+    context.Entry("HKCU\\Run → "+name, () =>
+    {
+     if (name=="b") throw new System.ComponentModel.Win32Exception(87);   // valor que Windows no devuelve
+     examined.Add(name);
+    });
+   Check.Equal("a,c", string.Join(",", examined), "Las demás entradas se siguen examinando");
+   Check.Equal(1, context.Issues.Count, "El fallo queda anotado");
+   Check.Contains("HKCU\\Run → b", context.Issues[0], "El aviso dice qué entrada se omitió");
+   var cancelled=false;
+   try { context.Entry("x", () => throw new OperationCanceledException()); }
+   catch (OperationCanceledException) { cancelled=true; }
+   Check.True(cancelled, "La cancelación no se trata como entrada ilegible");
+  });
   TestRegistry.Add("ADS nunca se considera destino ejecutable revisable", () =>
   {
    int probes=0;

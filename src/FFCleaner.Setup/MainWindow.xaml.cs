@@ -31,7 +31,7 @@ public partial class MainWindow : Window
                 HeaderSubtitle.Text = "Versión " + _manifest.Version;
                 UninstallText.Text = $"Se quitarán FFCleaner {_manifest.Version} instalado en {_manifest.Destination}, sus accesos directos y su entrada en «Aplicaciones instaladas».";
             }
-            catch (Exception ex) when (ex is InvalidOperationException or IOException or System.Text.Json.JsonException)
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
             {
                 UninstallText.Text = ex.Message;
                 PrimaryButton.IsEnabled = false;
@@ -108,7 +108,8 @@ public partial class MainWindow : Window
                     ". Para quitarlo, usa «Aplicaciones instaladas» de Windows.");
             }
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException or System.Security.SecurityException
+                                   or System.Text.Json.JsonException or System.Runtime.InteropServices.COMException or System.ComponentModel.Win32Exception)
         {
             _step = Step.Failed;
             ProgressTitle.Text = _options.Uninstall ? "No se completó la desinstalación" : "No se completó la instalación";

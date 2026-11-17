@@ -74,7 +74,7 @@ public partial class App : Application
         // Se buscan ANTES de abrir la ventana principal: si hay versión nueva, se instala y FFCleaner se reabre ya actualizado.
         // Abierto como administrador no se actualiza: el instalador correría elevado sobre una carpeta que el usuario
         // puede modificar. Se hará en el próximo arranque normal.
-        var updater = new UpdateService(_log, folders.IsSandbox ? null : UpdateService.ConfiguredRepository(), launch.UpdateFeed);
+        var updater = new UpdateService(_log, folders.IsSandbox ? null : UpdateService.ConfiguredRepository(), launch.UpdateFeed, workRoot: folders.Temp);
         if (settings.AutoUpdate && !RegistryScope.IsElevated &&
             await UpdateWindow.TryUpdateAsync(updater, UiPolicy.RelaunchArguments(e.Args), _log, folders.StateDirectory))
         {

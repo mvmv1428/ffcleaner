@@ -626,6 +626,24 @@ tests.Add("ajustes_permisos_de_agentes_desactivados_salvo_true_explicito", () =>
     Check.True(loaded.AgentsMayDeletePersonalData && loaded.AgentsMayChangeRegistry, "Activados desde Configuración, se guardan y se leen");
 });
 
+tests.Add("total_liberado_danado_o_bloqueado_no_se_pierde", () =>
+{
+    using var fixture = SandboxFixture.Create();
+    var state = fixture.Folders.StateDirectory;
+    Directory.CreateDirectory(state);
+    var totals = new CleanupTotals(state);
+    totals.Add(1000, 2, DateTime.UtcNow);
+    // Bloqueado por otro programa: no se puede leer, así que tampoco se sobrescribe con una sola limpieza.
+    var before = File.ReadAllText(totals.FilePath);
+    using (new FileStream(totals.FilePath, FileMode.Open, FileAccess.Read, FileShare.None)) totals.Add(700, 1, DateTime.UtcNow);
+    Check.Equal(before, File.ReadAllText(totals.FilePath), "Un acumulado ilegible no se sustituye");
+    // Dañado: se aparta para poder revisarlo y el acumulado se rehace (aquí no hay bitácoras: empieza de cero).
+    File.WriteAllText(totals.FilePath, "{dañado");
+    var after = totals.Add(500, 1, DateTime.UtcNow);
+    Check.Equal(1, Directory.GetFiles(state, "totals.json.danado-*").Length, "El archivo dañado se aparta, no se pierde");
+    Check.Equal(500L, after.Bytes, "La limpieza nueva se suma al acumulado rehecho");
+});
+
 tests.Add("ajustes_corruptos_no_se_sobrescriben", () =>
 {
     using var fixture = SandboxFixture.Create();

@@ -36,6 +36,8 @@ while ((line = await Console.In.ReadLineAsync()) is not null)
     JsonNode? response;
     try { response = await server.HandleAsync(JsonNode.Parse(line)); }
     catch (JsonException ex) { response = McpServer.Error(null, -32700, "JSON no válido: " + ex.Message); }
+    // Última red: ningún mensaje puede terminar el bucle; el agente recibe un error y el servidor sigue.
+    catch (Exception ex) { response = McpServer.Error(null, -32603, "Error interno: " + ex.Message); }
     if (response is null) continue;
     await stdout.WriteLineAsync(response.ToJsonString());
     await stdout.FlushAsync();

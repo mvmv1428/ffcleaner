@@ -31,7 +31,8 @@ internal sealed class DetectorContext(RegistryScope scope, ITargetProbe probe, R
             if (key is not null) KeysVisited++;
             return key;
         }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException)
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception)
         {
             Issues.Add(location.Display + ": no se pudo leer (" + ex.GetType().Name + "); sin conclusiones.");
             return null;
@@ -67,7 +68,8 @@ internal sealed class DetectorContext(RegistryScope scope, ITargetProbe probe, R
             using var key = scope.Open(location, writable: true);
             writable = key is not null;
         }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException)
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception)
         {
             writable = false;
         }
@@ -95,7 +97,8 @@ internal sealed class DetectorContext(RegistryScope scope, ITargetProbe probe, R
             stateHash = string.Empty;
             ambiguity ??= ex.Message;
         }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException)
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception)
         {
             stateHash = string.Empty;
             ambiguity ??= "No se pudo leer el contenido completo de la clave.";
@@ -138,7 +141,33 @@ internal sealed class DetectorContext(RegistryScope scope, ITargetProbe probe, R
     public static string[] SubKeyNames(RegistryKey key)
     {
         try { return key.GetSubKeyNames(); }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException) { return []; }
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception) { return []; }
+    }
+
+    public string[] ValueNames(RegistryKey key, RegLocation location)
+    {
+        try { return key.GetValueNames(); }
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception)
+        {
+            Issues.Add("No se pudieron listar los valores de " + location.Display + " (" + ex.GetType().Name + ").");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Examina una entrada. Si leerla falla (permisos, un valor que Windows no devuelve), se anota y se sigue con la
+    /// siguiente: un solo valor ilegible no debe interrumpir la familia entera ni ocultar sus demás hallazgos.
+    /// </summary>
+    public void Entry(string label, Action examine)
+    {
+        try { examine(); }
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
+                                   or System.ComponentModel.Win32Exception)
+        {
+            Issues.Add("No se pudo leer " + label + " (" + ex.GetType().Name + "); se omitió esa entrada.");
+        }
     }
 
     /// <summary>La ruta se normaliza antes de comparar: «/», «\\», «..» o mayúsculas no deben ocultar un destino del sistema.</summary>
@@ -187,32 +216,33 @@ internal static class RegistryDetectors
         using (key)
         {
             foreach (var name in DetectorContext.SubKeyNames(key))
-            {
-                var entry = location.Child(name);
-                using var child = context.Open(entry);
-                if (child is null) continue;
-                context.EntriesExamined++;
-                var raw = RawRegistry.Query(child, string.Empty);
-                var text = raw?.AsString();
-                if (string.IsNullOrWhiteSpace(text)) continue;
-
-                // REG_EXPAND_SZ se conserva crudo; solo se expande una copia para analizar.
-                var analysed = text.Contains('%') ? Environment.ExpandEnvironmentVariables(text) : text;
-                var expanded = !string.Equals(analysed, text, StringComparison.Ordinal);
-                var pure = RegistryEvaluator.Evaluate(new(entry.View.ToString(), entry.Display, string.Empty, analysed),
-                    path => context.Probe(entry.View, path));
-                if (pure is null) continue;
-                if (pure.Selectable)
+                context.Entry(location.Display + "\\" + name, () =>
                 {
-                    context.Report(entry, null, RepairKind.DeleteKey, text, pure.ResolvedTarget, TargetState.Missing,
-                        "El ejecutable registrado ya no existe.", expanded ? "la ruta depende de variables de entorno." : null);
-                    continue;
-                }
-                // Sintaxis fuera del caso estricto (argumentos, otra extensión…): segunda lectura tolerante.
-                var command = context.Resolve(entry.View, text);
-                if (command.State == TargetState.Present) continue;
-                context.Report(entry, null, RepairKind.DeleteKey, text, command.Path, TargetState.Unknown, pure.Reason);
-            }
+                    var entry = location.Child(name);
+                    using var child = context.Open(entry);
+                    if (child is null) return;
+                    context.EntriesExamined++;
+                    var raw = RawRegistry.Query(child, string.Empty);
+                    var text = raw?.AsString();
+                    if (string.IsNullOrWhiteSpace(text)) return;
+
+                    // REG_EXPAND_SZ se conserva crudo; solo se expande una copia para analizar.
+                    var analysed = text.Contains('%') ? Environment.ExpandEnvironmentVariables(text) : text;
+                    var expanded = !string.Equals(analysed, text, StringComparison.Ordinal);
+                    var pure = RegistryEvaluator.Evaluate(new(entry.View.ToString(), entry.Display, string.Empty, analysed),
+                        path => context.Probe(entry.View, path));
+                    if (pure is null) return;
+                    if (pure.Selectable)
+                    {
+                        context.Report(entry, null, RepairKind.DeleteKey, text, pure.ResolvedTarget, TargetState.Missing,
+                            "El ejecutable registrado ya no existe.", expanded ? "la ruta depende de variables de entorno." : null);
+                        return;
+                    }
+                    // Sintaxis fuera del caso estricto (argumentos, otra extensión…): segunda lectura tolerante.
+                    var command = context.Resolve(entry.View, text);
+                    if (command.State == TargetState.Present) return;
+                    context.Report(entry, null, RepairKind.DeleteKey, text, command.Path, TargetState.Unknown, pure.Reason);
+                });
         }
     }
 
@@ -223,54 +253,55 @@ internal static class RegistryDetectors
         using (key)
         {
             foreach (var name in DetectorContext.SubKeyNames(key))
-            {
-                var entry = location.Child(name);
-                using var child = context.Open(entry);
-                if (child is null) continue;
-                context.EntriesExamined++;
-                var uninstall = RawRegistry.Query(child, "UninstallString")?.AsString();
-                if (string.IsNullOrWhiteSpace(uninstall)) continue;
-                // Windows Installer gestiona estas entradas con su propia base de datos: no se evalúan por ruta.
-                if (RawRegistry.Query(child, "WindowsInstaller")?.AsDword() == 1 ||
-                    uninstall.TrimStart('"', ' ').StartsWith("msiexec", StringComparison.OrdinalIgnoreCase)) continue;
+                context.Entry(location.Display + "\\" + name, () =>
+                {
+                    var entry = location.Child(name);
+                    using var child = context.Open(entry);
+                    if (child is null) return;
+                    context.EntriesExamined++;
+                    var uninstall = RawRegistry.Query(child, "UninstallString")?.AsString();
+                    if (string.IsNullOrWhiteSpace(uninstall)) return;
+                    // Windows Installer gestiona estas entradas con su propia base de datos: no se evalúan por ruta.
+                    if (RawRegistry.Query(child, "WindowsInstaller")?.AsDword() == 1 ||
+                        uninstall.TrimStart('"', ' ').StartsWith("msiexec", StringComparison.OrdinalIgnoreCase)) return;
 
-                var command = context.Resolve(entry.View, uninstall);
-                if (command.State == TargetState.Present) continue;
-                var display = RawRegistry.Query(child, "DisplayName")?.AsString();
-                var label = string.IsNullOrWhiteSpace(display) ? name : display;
-                if (command.State == TargetState.Unknown)
-                {
-                    context.Report(entry, null, RepairKind.DeleteKey, uninstall, command.Path, TargetState.Unknown,
-                        "Desinstalador de «" + label + "» no verificable: " + command.Reason);
-                    continue;
-                }
+                    var command = context.Resolve(entry.View, uninstall);
+                    if (command.State == TargetState.Present) return;
+                    var display = RawRegistry.Query(child, "DisplayName")?.AsString();
+                    var label = string.IsNullOrWhiteSpace(display) ? name : display;
+                    if (command.State == TargetState.Unknown)
+                    {
+                        context.Report(entry, null, RepairKind.DeleteKey, uninstall, command.Path, TargetState.Unknown,
+                            "Desinstalador de «" + label + "» no verificable: " + command.Reason);
+                        return;
+                    }
 
-                // Un desinstalador ausente no basta (hay instaladores que borran su copia en caché con el programa
-                // aún instalado): hace falta que otra referencia comprobable de la entrada también haya desaparecido,
-                // y que ninguna siga existiendo.
-                string? ambiguity = command.Expanded ? "la ruta depende de variables de entorno." : null;
-                var folder = RawRegistry.Query(child, "InstallLocation")?.AsString()?.Trim().Trim('"').TrimEnd('\\');
-                var icon = RawRegistry.Query(child, "DisplayIcon")?.AsString()?.Trim().Trim('"');
-                var corroborated = false;
-                if (!string.IsNullOrWhiteSpace(folder))
-                {
-                    if (!CommandLine.IsAbsoluteLocal(folder + "\\")) ambiguity ??= "la carpeta de instalación no es una ruta local comprobable.";
-                    else if (context.Probe(entry.View, folder) != TargetState.Missing) ambiguity ??= "la carpeta de instalación todavía existe o no se pudo comprobar.";
-                    else corroborated = true;
-                }
-                if (!string.IsNullOrWhiteSpace(icon))
-                {
-                    var comma = icon.LastIndexOf(',');
-                    var iconPath = comma > 2 ? icon[..comma].Trim('"') : icon;
-                    if (!CommandLine.IsAbsoluteLocal(iconPath)) { if (!corroborated) ambiguity ??= "el icono del programa no es una ruta local comprobable."; }
-                    else if (context.Probe(entry.View, iconPath) != TargetState.Missing) ambiguity ??= "el icono del programa todavía existe o no se pudo comprobar.";
-                    else corroborated = true;
-                }
-                if (!corroborated) ambiguity ??= "la entrada no indica carpeta de instalación ni icono que confirmen la desinstalación.";
-                context.Report(entry, null, RepairKind.DeleteKey, uninstall, command.Path, TargetState.Missing,
-                    "El desinstalador de «" + label + "» ya no existe.", ambiguity,
-                    critical: RawRegistry.Query(child, "SystemComponent")?.AsDword() == 1);
-            }
+                    // Un desinstalador ausente no basta (hay instaladores que borran su copia en caché con el programa
+                    // aún instalado): hace falta que otra referencia comprobable de la entrada también haya desaparecido,
+                    // y que ninguna siga existiendo.
+                    string? ambiguity = command.Expanded ? "la ruta depende de variables de entorno." : null;
+                    var folder = RawRegistry.Query(child, "InstallLocation")?.AsString()?.Trim().Trim('"').TrimEnd('\\');
+                    var icon = RawRegistry.Query(child, "DisplayIcon")?.AsString()?.Trim().Trim('"');
+                    var corroborated = false;
+                    if (!string.IsNullOrWhiteSpace(folder))
+                    {
+                        if (!CommandLine.IsAbsoluteLocal(folder + "\\")) ambiguity ??= "la carpeta de instalación no es una ruta local comprobable.";
+                        else if (context.Probe(entry.View, folder) != TargetState.Missing) ambiguity ??= "la carpeta de instalación todavía existe o no se pudo comprobar.";
+                        else corroborated = true;
+                    }
+                    if (!string.IsNullOrWhiteSpace(icon))
+                    {
+                        var comma = icon.LastIndexOf(',');
+                        var iconPath = comma > 2 ? icon[..comma].Trim('"') : icon;
+                        if (!CommandLine.IsAbsoluteLocal(iconPath)) { if (!corroborated) ambiguity ??= "el icono del programa no es una ruta local comprobable."; }
+                        else if (context.Probe(entry.View, iconPath) != TargetState.Missing) ambiguity ??= "el icono del programa todavía existe o no se pudo comprobar.";
+                        else corroborated = true;
+                    }
+                    if (!corroborated) ambiguity ??= "la entrada no indica carpeta de instalación ni icono que confirmen la desinstalación.";
+                    context.Report(entry, null, RepairKind.DeleteKey, uninstall, command.Path, TargetState.Missing,
+                        "El desinstalador de «" + label + "» ya no existe.", ambiguity,
+                        critical: RawRegistry.Query(child, "SystemComponent")?.AsDword() == 1);
+                });
         }
     }
 
@@ -287,37 +318,39 @@ internal static class RegistryDetectors
         using (key)
         {
             foreach (var name in DetectorContext.SubKeyNames(key))
-            {
-                if (!name.StartsWith('.')) continue;
-                var entry = location.Child(name);
-                using var child = context.Open(entry);
-                if (child is null) continue;
-                context.EntriesExamined++;
-                var progId = RawRegistry.Query(child, string.Empty)?.AsString();
-                if (string.IsNullOrWhiteSpace(progId) || progId.IndexOfAny(['\\', '/']) >= 0) continue;
-                defaultHandlers.Add(progId);
-                var registered = ClassRegistered(context, progId);
-                if (registered != TargetState.Missing) continue;
-                // Las asociaciones de todo el equipo las escriben instaladores y el propio Windows: solo se informan.
-                context.Report(entry, string.Empty, RepairKind.DeleteValue, progId, @"HKCR\" + progId, TargetState.Missing,
-                    "La extensión " + name + " apunta al tipo «" + progId + "», que no está registrado.",
-                    entry.Hive == RegHive.LocalMachine ? "es una asociación de todo el equipo." : null, systemTargetIsCritical: false);
-            }
+                context.Entry(location.Display + "\\" + name, () =>
+                {
+                    if (!name.StartsWith('.')) return;
+                    var entry = location.Child(name);
+                    using var child = context.Open(entry);
+                    if (child is null) return;
+                    context.EntriesExamined++;
+                    var progId = RawRegistry.Query(child, string.Empty)?.AsString();
+                    if (string.IsNullOrWhiteSpace(progId) || progId.IndexOfAny(['\\', '/']) >= 0) return;
+                    defaultHandlers.Add(progId);
+                    var registered = ClassRegistered(context, progId);
+                    if (registered != TargetState.Missing) return;
+                    // Las asociaciones de todo el equipo las escriben instaladores y el propio Windows: solo se informan.
+                    context.Report(entry, string.Empty, RepairKind.DeleteValue, progId, @"HKCR\" + progId, TargetState.Missing,
+                        "La extensión " + name + " apunta al tipo «" + progId + "», que no está registrado.",
+                        entry.Hive == RegHive.LocalMachine ? "es una asociación de todo el equipo." : null, systemTargetIsCritical: false);
+                });
         }
 
         foreach (var (location, key) in Roots(context, BothHives, classes + @"\Applications"))
         using (key)
         {
             foreach (var name in DetectorContext.SubKeyNames(key))
-            {
-                var entry = location.Child(name);
-                context.EntriesExamined++;
-                var (state, raw, path, reason, expanded) = ShellCommands(context, entry);
-                if (state is null or TargetState.Present) continue;
-                context.Report(entry, null, RepairKind.DeleteKey, raw, path, state.Value,
-                    state == TargetState.Missing ? "«Abrir con»: el programa " + name + " ya no existe." : "«Abrir con» " + name + ": " + reason,
-                    state == TargetState.Missing && expanded ? "la ruta depende de variables de entorno." : null);
-            }
+                context.Entry(location.Display + "\\" + name, () =>
+                {
+                    var entry = location.Child(name);
+                    context.EntriesExamined++;
+                    var (state, raw, path, reason, expanded) = ShellCommands(context, entry);
+                    if (state is null or TargetState.Present) return;
+                    context.Report(entry, null, RepairKind.DeleteKey, raw, path, state.Value,
+                        state == TargetState.Missing ? "«Abrir con»: el programa " + name + " ya no existe." : "«Abrir con» " + name + ": " + reason,
+                        state == TargetState.Missing && expanded ? "la ruta depende de variables de entorno." : null);
+                });
         }
 
         // Tipos de archivo del usuario cuyo programa ya no existe (lo que deja un programa al desinstalarse).
@@ -327,37 +360,38 @@ internal static class RegistryDetectors
         using var user = context.Open(userClasses);
         if (user is null) return;
         foreach (var name in DetectorContext.SubKeyNames(user))
-        {
-            if (!RegistryFamilyRules.IsUserFileType(name)) continue;
-            var entry = userClasses.Child(name);
-            var (state, raw, path, _, expanded) = ShellCommands(context, entry);
-            if (state != TargetState.Missing) continue;   // sin comandos, alguno vivo o alguno no verificable
-            context.EntriesExamined++;
+            context.Entry(userClasses.Display + "\\" + name, () =>
+            {
+                if (!RegistryFamilyRules.IsUserFileType(name)) return;
+                var entry = userClasses.Child(name);
+                var (state, raw, path, _, expanded) = ShellCommands(context, entry);
+                if (state != TargetState.Missing) return;   // sin comandos, alguno vivo o alguno no verificable
+                context.EntriesExamined++;
 
-            string? ambiguity = expanded ? "la ruta depende de variables de entorno." : null;
-            using (var key = context.Open(entry))
-            {
-                if (key is null) continue;
-                var extras = DetectorContext.SubKeyNames(key)
-                    .Where(n => !n.Equals("shell", StringComparison.OrdinalIgnoreCase) && !n.Equals("DefaultIcon", StringComparison.OrdinalIgnoreCase)).ToList();
-                if (extras.Count > 0) ambiguity ??= "el tipo declara otros componentes (" + string.Join(", ", extras.Take(3)) + ").";
-            }
-            using (var iconKey = context.Open(entry.Child("DefaultIcon")))
-            {
-                var icon = iconKey is null ? null : RawRegistry.Query(iconKey, string.Empty)?.AsString()?.Trim();
-                if (!string.IsNullOrWhiteSpace(icon))
+                string? ambiguity = expanded ? "la ruta depende de variables de entorno." : null;
+                using (var key = context.Open(entry))
                 {
-                    var comma = icon.LastIndexOf(',');
-                    var iconPath = (comma > 2 ? icon[..comma] : icon).Trim().Trim('"');
-                    if (!CommandLine.IsAbsoluteLocal(iconPath)) ambiguity ??= "su icono no es una ruta local comprobable.";
-                    else if (context.Probe(entry.View, iconPath) != TargetState.Missing) ambiguity ??= "su icono todavía existe o no se pudo comprobar.";
+                    if (key is null) return;
+                    var extras = DetectorContext.SubKeyNames(key)
+                        .Where(n => !n.Equals("shell", StringComparison.OrdinalIgnoreCase) && !n.Equals("DefaultIcon", StringComparison.OrdinalIgnoreCase)).ToList();
+                    if (extras.Count > 0) ambiguity ??= "el tipo declara otros componentes (" + string.Join(", ", extras.Take(3)) + ").";
                 }
-            }
-            if (MachineClassState(context, name) != TargetState.Missing) ambiguity ??= "el tipo también está registrado para todo el equipo.";
-            if (defaultHandlers.Contains(name)) ambiguity ??= "una extensión lo tiene como programa predeterminado.";
-            context.Report(entry, null, RepairKind.DeleteKey, raw, path, TargetState.Missing,
-                "El tipo de archivo o protocolo «" + name + "» pertenece a un programa que ya no existe.", ambiguity);
-        }
+                using (var iconKey = context.Open(entry.Child("DefaultIcon")))
+                {
+                    var icon = iconKey is null ? null : RawRegistry.Query(iconKey, string.Empty)?.AsString()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(icon))
+                    {
+                        var comma = icon.LastIndexOf(',');
+                        var iconPath = (comma > 2 ? icon[..comma] : icon).Trim().Trim('"');
+                        if (!CommandLine.IsAbsoluteLocal(iconPath)) ambiguity ??= "su icono no es una ruta local comprobable.";
+                        else if (context.Probe(entry.View, iconPath) != TargetState.Missing) ambiguity ??= "su icono todavía existe o no se pudo comprobar.";
+                    }
+                }
+                if (MachineClassState(context, name) != TargetState.Missing) ambiguity ??= "el tipo también está registrado para todo el equipo.";
+                if (defaultHandlers.Contains(name)) ambiguity ??= "una extensión lo tiene como programa predeterminado.";
+                context.Report(entry, null, RepairKind.DeleteKey, raw, path, TargetState.Missing,
+                    "El tipo de archivo o protocolo «" + name + "» pertenece a un programa que ya no existe.", ambiguity);
+            });
     }
 
     /// <summary>¿Existe la clase en HKLM, en cualquier vista? Un fallo de acceso cuenta como «no se sabe».</summary>
@@ -380,18 +414,19 @@ internal static class RegistryDetectors
         foreach (var (location, key) in Roots(context, BothHives, CurrentVersion + "\\" + keyName))
         using (key)
         {
-            foreach (var valueName in key.GetValueNames())
-            {
-                context.Token.ThrowIfCancellationRequested();
-                var text = RawRegistry.Query(key, valueName)?.AsString();
-                if (string.IsNullOrWhiteSpace(text)) continue;
-                context.EntriesExamined++;
-                var command = context.Resolve(location.View, text);
-                if (command.State == TargetState.Present) continue;
-                context.Report(location, valueName, RepairKind.DeleteValue, text, command.Path, command.State,
-                    command.State == TargetState.Missing ? "El programa de inicio ya no existe." : "Entrada de inicio no verificable: " + command.Reason,
-                    command.State == TargetState.Missing && command.Expanded ? "la ruta depende de variables de entorno." : null);
-            }
+            foreach (var valueName in context.ValueNames(key, location))
+                context.Entry(location.Display + " → " + valueName, () =>
+                {
+                    context.Token.ThrowIfCancellationRequested();
+                    var text = RawRegistry.Query(key, valueName)?.AsString();
+                    if (string.IsNullOrWhiteSpace(text)) return;
+                    context.EntriesExamined++;
+                    var command = context.Resolve(location.View, text);
+                    if (command.State == TargetState.Present) return;
+                    context.Report(location, valueName, RepairKind.DeleteValue, text, command.Path, command.State,
+                        command.State == TargetState.Missing ? "El programa de inicio ya no existe." : "Entrada de inicio no verificable: " + command.Reason,
+                        command.State == TargetState.Missing && command.Expanded ? "la ruta depende de variables de entorno." : null);
+                });
         }
     }
 
@@ -408,20 +443,21 @@ internal static class RegistryDetectors
         foreach (var (location, key) in Roots(context, [RegHive.CurrentUser], store))
         using (key)
         {
-            foreach (var valueName in key.GetValueNames())
-            {
-                context.Token.ThrowIfCancellationRequested();
-                var path = valueName;
-                foreach (var suffix in suffixes)
-                    if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) { path = path[..^suffix.Length]; break; }
-                if (!CommandLine.IsAbsoluteLocal(path)) continue;
-                context.EntriesExamined++;
-                var state = context.Probe(location.View, path);
-                if (state == TargetState.Present) continue;
-                if (state == TargetState.Unknown) { context.Unverifiable++; continue; }
-                context.Report(location, valueName, RepairKind.DeleteValue, valueName, path, TargetState.Missing,
-                    "Entrada de caché de un programa que ya no existe.", systemTargetIsCritical: false);
-            }
+            foreach (var valueName in context.ValueNames(key, location))
+                context.Entry(location.Display + " → " + valueName, () =>
+                {
+                    context.Token.ThrowIfCancellationRequested();
+                    var path = valueName;
+                    foreach (var suffix in suffixes)
+                        if (path.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) { path = path[..^suffix.Length]; break; }
+                    if (!CommandLine.IsAbsoluteLocal(path)) return;
+                    context.EntriesExamined++;
+                    var state = context.Probe(location.View, path);
+                    if (state == TargetState.Present) return;
+                    if (state == TargetState.Unknown) { context.Unverifiable++; return; }
+                    context.Report(location, valueName, RepairKind.DeleteValue, valueName, path, TargetState.Missing,
+                        "Entrada de caché de un programa que ya no existe.", systemTargetIsCritical: false);
+                });
         }
     }
 
@@ -431,17 +467,18 @@ internal static class RegistryDetectors
         foreach (var (location, key) in Roots(context, [RegHive.LocalMachine], CurrentVersion + @"\SharedDLLs"))
         using (key)
         {
-            foreach (var valueName in key.GetValueNames())
-            {
-                context.Token.ThrowIfCancellationRequested();
-                if (!CommandLine.IsAbsoluteLocal(valueName)) continue;
-                context.EntriesExamined++;
-                var state = context.Probe(location.View, valueName);
-                if (state == TargetState.Present) continue;
-                if (state == TargetState.Unknown) { context.Unverifiable++; continue; }
-                context.Report(location, valueName, RepairKind.DeleteValue, valueName, valueName, TargetState.Missing,
-                    "Contador de DLL compartida de un archivo que ya no existe.");
-            }
+            foreach (var valueName in context.ValueNames(key, location))
+                context.Entry(location.Display + " → " + valueName, () =>
+                {
+                    context.Token.ThrowIfCancellationRequested();
+                    if (!CommandLine.IsAbsoluteLocal(valueName)) return;
+                    context.EntriesExamined++;
+                    var state = context.Probe(location.View, valueName);
+                    if (state == TargetState.Present) return;
+                    if (state == TargetState.Unknown) { context.Unverifiable++; return; }
+                    context.Report(location, valueName, RepairKind.DeleteValue, valueName, valueName, TargetState.Missing,
+                        "Contador de DLL compartida de un archivo que ya no existe.");
+                });
         }
     }
 

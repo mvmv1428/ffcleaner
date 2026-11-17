@@ -90,4 +90,26 @@ Test("acceso_directo_se_resuelve_a_su_destino", () =>
     }
     finally { Directory.Delete(folder, recursive: true); }
 });
+// Una versión publicada rara nunca impide abrir FFCleaner (antes, una etiqueta «v1.0» lo cerraba al arrancar).
+Test("version_publicada_con_etiqueta_de_dos_partes_o_url_mala_no_cierra_la_app", () =>
+{
+    var feed = new Uri("http://127.0.0.1:9/releases/latest");
+    UpdateInfo? Check(string json) =>
+        new UpdateService(FFCleaner.Core.DiagnosticsLog.Null, null, feed, new FakeFeed(json)).CheckAsync().GetAwaiter().GetResult();
+    string Release(string tag, string asset, string url) =>
+        "{\"tag_name\":\"" + tag + "\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"" + asset +
+        "\",\"browser_download_url\":\"" + url + "\",\"size\":1,\"digest\":\"sha256:" + new string('a', 64) + "\"}]}";
+    bool Refused(string json) { try { Check(json); return false; } catch (InvalidOperationException) { return true; } }
+    var twoParts = Check(Release("v99.0", "FFCleaner-99.0.0-win-x64.zip", "http://127.0.0.1:9/a.zip"));
+    return twoParts is { } info && info.Version == new Version(99, 0, 0) && info.AssetName == "FFCleaner-99.0.0-win-x64.zip" &&
+           Refused(Release("v99.0", "FFCleaner-99.0-win-x64.zip", "http://127.0.0.1:9/a.zip")) &&
+           Refused(Release("v99.0.0", "FFCleaner-99.0.0-win-x64.zip", "no es una url"));
+});
 return failed == 0 ? 0 : 1;
+
+/// <summary>Fuente de versiones falsa: responde siempre el mismo JSON, sin red.</summary>
+sealed class FakeFeed(string json) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(json) });
+}

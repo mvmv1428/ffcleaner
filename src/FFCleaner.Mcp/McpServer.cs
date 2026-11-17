@@ -75,8 +75,10 @@ public sealed class McpServer
     {
         if (message is not JsonObject request) return Error(null, -32600, "Se esperaba un objeto JSON-RPC.");
         var id = request["id"]?.DeepClone();
-        var method = request["method"]?.GetValue<string>();
-        if (method is null) return id is null ? null : Error(id, -32600, "Falta «method».");
+        // «method» debe ser un texto: un número u objeto ahí es una petición no válida, no un error que cierre el servidor.
+        var method = request["method"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+        if (method is null)
+            return id is null ? null : Error(id, -32600, request["method"] is null ? "Falta «method»." : "«method» debe ser un texto.");
         if (id is null) return null;   // notificación (initialized, cancelled…): no se responde
         try
         {
@@ -295,29 +297,40 @@ public sealed class McpServer
         if (_settingsProblem is not null) throw new ToolRefusal(_settingsProblem + ": sin las rutas protegidas del usuario no se analiza para limpiar.");
         if ((allowPersonal || allowModels) && !Permissions().AgentsMayDeletePersonalData) throw new ToolRefusal(PersonalNotAllowed);
 
-        _selection.Clear();
-        if (preset == "safe") _selection.SelectAll();
+        // Todo se valida contra el catálogo ANTES de tocar la selección: cambiarla invalida el análisis anterior, y una
+        // petición rechazada (objetivo desconocido, sin permiso, vacía) no debe dejar al agente sin su analysis_id vigente.
+        var catalog = _selection.Catalog;
+        bool Allowed(CleanupCategory c) =>
+            c.Risk is not (CategoryRisk.DatosPersonales or CategoryRisk.MuyGrande) ||
+            c.Risk == CategoryRisk.DatosPersonales && allowPersonal || c.Risk == CategoryRisk.MuyGrande && allowModels;
+        var planned = new HashSet<TargetKey>();
+        if (preset == "safe") planned.UnionWith(catalog.AllTargets().Select(t => t.Key).Where(k => !_selection.IsOptIn(k)));
         foreach (var item in targets)
         {
             var parts = item.Split('/');
-            var known = parts.Length switch
+            var app = catalog.Apps.FirstOrDefault(a => a.Id == parts[0]);
+            var category = parts.Length >= 2 ? app?.Categories.FirstOrDefault(c => c.Id == parts[1]) : null;
+            var keys = parts.Length switch
             {
-                1 => _selection.Catalog.Apps.Any(a => a.Id == parts[0]) && SelectApp(parts[0], allowPersonal, allowModels),
-                2 => _selection.SetCategory(parts[0], parts[1], true) || _selection.CategoryState(parts[0], parts[1]) == true,
-                3 => _selection.SetTarget(new(parts[0], parts[1], parts[2]), true) || _selection.IsSelected(new(parts[0], parts[1], parts[2])),
-                _ => false,
+                // Una aplicación entera: sus categorías normales, y las que requieren permiso solo si se concedió.
+                1 when app is not null => app.Categories.Where(Allowed).SelectMany(c => c.Targets).Select(t => t.Key).ToList(),
+                2 when category is not null => category.Targets.Select(t => t.Key).ToList(),
+                3 when category is not null => category.Targets.Select(t => t.Key).Where(k => k.ProfileId == parts[2]).ToList(),
+                _ => [],
             };
-            if (!known) throw new ToolRefusal("Objetivo desconocido: «" + item + "». Consulta list_cleanup_targets.");
+            if (keys.Count == 0 && !(parts.Length == 1 && app is not null))
+                throw new ToolRefusal("Objetivo desconocido: «" + item + "». Consulta list_cleanup_targets.");
+            planned.UnionWith(keys);
         }
-        var blocked = _selection.SelectedKeys().Where(k => _selection.IsOptIn(k)).Select(k => (Key: k, Risk: RiskOf(k)))
+        var blocked = planned.Where(k => _selection.IsOptIn(k)).Select(k => (Key: k, Risk: RiskOf(k)))
             .Where(p => p.Risk == CategoryRisk.DatosPersonales && !allowPersonal || p.Risk == CategoryRisk.MuyGrande && !allowModels).ToList();
         if (blocked.Count > 0)
-        {
-            _selection.Clear();
             throw new ToolRefusal("Estos objetivos requieren permiso expreso del usuario (" +
                 string.Join(", ", blocked.Select(b => b.Key + " → " + (b.Risk == CategoryRisk.DatosPersonales ? "allow_personal_data" : "allow_models"))) + ").");
-        }
-        if (_selection.SelectedCount == 0) throw new ToolRefusal("La selección está vacía.");
+        if (planned.Count == 0) throw new ToolRefusal("La selección está vacía.");
+
+        _selection.Clear();
+        foreach (var key in planned) _selection.SetTarget(key, true);
 
         var session = await _workflow.AnalyzeAsync();
         if (!ReferenceEquals(session, _workflow.CurrentSession)) throw new ToolRefusal(_workflow.InvalidationReason ?? "El análisis no quedó vigente; repítelo.");
@@ -350,16 +363,6 @@ public sealed class McpServer
             issues = session.Issues.Take(20).Select(i => new { code = i.Code, path = i.Path, message = i.Message }),
             next_step = session.EligibleFiles == 0 ? "No hay nada que limpiar." : "Muestra al usuario lo que se libera y, si está de acuerdo, llama a clean con este analysis_id y confirm=true.",
         };
-    }
-
-    private bool SelectApp(string appId, bool allowPersonal, bool allowModels)
-    {
-        _selection.SetApp(appId, true);   // nunca incluye las categorías que requieren permiso
-        var app = _selection.Catalog.Apps.First(a => a.Id == appId);
-        foreach (var category in app.Categories)
-            if (category.Risk == CategoryRisk.DatosPersonales && allowPersonal || category.Risk == CategoryRisk.MuyGrande && allowModels)
-                _selection.SetCategory(appId, category.Id, true);
-        return true;
     }
 
     private CategoryRisk RiskOf(TargetKey key) =>

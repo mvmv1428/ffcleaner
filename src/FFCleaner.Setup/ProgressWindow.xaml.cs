@@ -17,9 +17,10 @@ public partial class ProgressWindow : Window
         StatusText.Text = value.Text;
     }
 
-    public void ShowError(string message)
+    /// <param name="relaunching">Si se va a reabrir la versión instalada; si no, no se promete.</param>
+    public void ShowError(string message, bool relaunching)
     {
         Bar.Value = 0;
-        StatusText.Text = "No se pudo actualizar: " + message + " Se abrirá la versión que tenías.";
+        StatusText.Text = "No se pudo actualizar: " + message + (relaunching ? " Se abrirá la versión que tenías." : "");
     }
 }

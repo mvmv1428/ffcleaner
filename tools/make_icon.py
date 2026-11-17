@@ -86,6 +86,7 @@ def main():
     for s, f in zip(sizes, frames):
         preview.paste(f, (x, 150 - s // 2), f)
         x += s + 20
+    (BASE / 'artifacts').mkdir(exist_ok=True)
     preview.save(BASE / 'artifacts' / 'icon-preview.png')
     print('icono:', OUT / 'ffcleaner.ico')
 

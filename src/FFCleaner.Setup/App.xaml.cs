@@ -53,24 +53,28 @@ public partial class App : Application
                 }
                 Shutdown(0);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.SecurityException or System.Text.Json.JsonException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Security.SecurityException
+                                       or System.Text.Json.JsonException or ArgumentException or FormatException
+                                       or System.Runtime.InteropServices.COMException or System.ComponentModel.Win32Exception)
             {
                 // Otra ventana de FFCleaner (o el servidor MCP de un agente) sigue abierta: el usuario ya tiene FFCleaner,
                 // así que no se reabre nada (reabrirlo volvería a intentar la actualización) y se deja para la próxima vez.
                 var running = ex is AppRunningException;
+                var existing = Path.Combine(options.Destination, "FFCleaner.exe");
+                // Solo se reabre la versión anterior si existe y sabe leer el aviso de fallo (si no, lo reintentaría en bucle).
+                var relaunch = options.Update && !running && options.Launch && File.Exists(existing) && SetupEngine.UnderstandsFailedMarker(existing);
                 if (window is not null)
                 {
                     window.ShowError(running && options.Update
                         ? ex.Message.Split('.')[0] + ". La actualización se hará la próxima vez que abras FFCleaner."
-                        : ex.Message);
+                        : ex.Message, relaunch);
                     await Task.Delay(4000);
                 }
                 if (options.Update && !running)
                 {
                     // El aviso evita que la versión que se reabre lo vuelva a intentar enseguida (un fallo persistente sería un bucle).
                     SetupEngine.RecordFailedUpdate(effective.DataDirectory, options.TargetVersion, ex.Message);
-                    var existing = Path.Combine(options.Destination, "FFCleaner.exe");
-                    if (options.Launch && File.Exists(existing) && SetupEngine.UnderstandsFailedMarker(existing))
+                    if (relaunch)
                         try
                         {
                             // Mismos argumentos (p. ej. el sandbox de las pruebas) salvo «--updated-from»: no se actualizó nada.

@@ -117,7 +117,8 @@ public sealed class RegistryRepairService : IRegistryRepairService
                     Set(finding, status, detail);
                 }
                 catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException
-                                               or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException)
+                                               or System.ComponentModel.Win32Exception or InvalidOperationException or ArgumentException
+                                               or RegistryTreeTooLargeException)
                 {
                     // Solo se afirma «no se modificó» si la relectura coincide con lo respaldado; una clave con
                     // subclaves puede haber quedado a medias.
@@ -148,7 +149,8 @@ public sealed class RegistryRepairService : IRegistryRepairService
                 ? RegistrySnapshot.Hash(RegistrySnapshot.CaptureValue(key, entry.Value!.Name)) == RegistrySnapshot.Hash(entry.Value)
                 : RegistrySnapshot.Hash(RegistrySnapshot.CaptureTree(key, entry.Tree!.Name)) == RegistrySnapshot.Hash(entry.Tree);
         }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException or RegistryTreeTooLargeException)
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException or RegistryTreeTooLargeException
+                                   or System.ComponentModel.Win32Exception)
         {
             return false;
         }
@@ -172,7 +174,8 @@ public sealed class RegistryRepairService : IRegistryRepairService
             return RegistrySnapshot.Hash(tree) != finding.StateHash ? null
                 : new(finding.Id, finding.Family, finding.Location.Hive, finding.Location.View, finding.Location.KeyPath, physical, RepairKind.DeleteKey, null, tree, finding.Evidence);
         }
-        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException or RegistryTreeTooLargeException)
+        catch (Exception ex) when (ex is SecurityException or UnauthorizedAccessException or IOException or RegistryTreeTooLargeException
+                                   or System.ComponentModel.Win32Exception)
         {
             return null;
         }

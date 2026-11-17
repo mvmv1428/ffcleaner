@@ -110,6 +110,10 @@ try:
           values['UninstallString'] == f'"{uninstaller}" --uninstall' and values['QuietUninstallString'] == f'"{uninstaller}" --uninstall --quiet' and values['NoModify'] == 1,
           'registrado en «Aplicaciones instaladas» con un desinstalador .exe')
 
+    # 2b. Un argumento mal formado termina con código 1 (antes, --wait-pid abc cerraba el instalador de golpe).
+    bad = subprocess.run([str(wizard), '--quiet', '--update', '--wait-pid', 'abc'], capture_output=True, timeout=120)
+    check(bad.returncode == 1 and b'wait-pid' in bad.stderr, 'un --wait-pid no numérico se rechaza con código 1')
+
     # 3. Lo instalado funciona con su propio runtime: el servidor MCP responde.
     mcp = subprocess.run([str(dest / 'FFCleaner.Mcp.exe'), '--sandbox', str(sandbox), '--sandbox-registry', run_id],
                          input=b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}\n', capture_output=True, timeout=120)

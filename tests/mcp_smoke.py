@@ -126,6 +126,11 @@ try:
                          'restore_registry_backup', 'list_startup_programs', 'set_startup_program'}, 'nueve herramientas publicadas')
     check(tools['clean']['annotations']['destructiveHint'] and tools['analyze_cleanup']['annotations']['readOnlyHint'], 'anotaciones de solo lectura y destructivas')
     check('error' in client.request('no/existe'), 'método desconocido devuelve error JSON-RPC')
+    process.stdin.write((json.dumps({'jsonrpc': '2.0', 'id': 500, 'method': 123}) + '\n').encode('utf-8'))
+    process.stdin.flush()
+    reply = json.loads(process.stdout.readline())
+    check(reply.get('id') == 500 and reply['error']['code'] == -32600, 'un «method» que no es texto devuelve error JSON-RPC')
+    check('result' in client.request('ping'), 'y el servidor sigue respondiendo')
 
     # ── Limpieza ──
     catalog, error = client.call('list_cleanup_targets')
@@ -144,6 +149,8 @@ try:
     check(not error and analysis['freeable_bytes'] > 0 and analysis['nothing_deleted_yet'], f"preset safe analiza sin borrar: {analysis['freeable']}")
     check(not any('/history/' in k or '/cookies/' in k for k in target_keys), 'el preset safe no incluye datos personales')
     check(len(list((chrome / 'Cache/Cache_Data').iterdir())) == 20, 'analizar no borra nada')
+    refused, error = client.call('analyze_cleanup', {'targets': ['chrome/no-existe']})
+    check(error and 'desconocido' in refused['error'], 'una categoría desconocida es un rechazo de la herramienta, no un error de protocolo')
     _, error = client.call('clean', {'analysis_id': analysis['analysis_id']})
     check(error, 'limpiar sin confirm=true se rechaza')
     _, error = client.call('clean', {'analysis_id': 'inventado', 'confirm': True})
