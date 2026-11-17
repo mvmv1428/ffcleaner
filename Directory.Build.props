@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <!-- Versión única de todo FFCleaner. Para publicar una versión nueva: cambiarla aquí y crear la etiqueta vX.Y.Z. -->
-    <Version>0.3.3</Version>
+    <Version>0.3.4</Version>
     <!-- Repositorio de GitHub donde el actualizador busca versiones nuevas, como «usuario/nombre».
          Vacío = la aplicación no busca actualizaciones. -->
     <FFCleanerUpdateRepository>mvmv1428/ffcleaner</FFCleanerUpdateRepository>
